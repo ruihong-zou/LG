@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Office Document Processor</title>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .method { margin: 20px 0; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
+        input[type="file"] { margin: 10px 0; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 3px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+    <h1>📄 Office Document Processor</h1>
+    
+    <div class="method">
+        <h2>🚀 Aspose 处理</h2>
+        <p>支持 .doc, .docx, .xls, .xlsx，版式保持度最高</p>
+        <form action="/api/aspose/process" method="post" enctype="multipart/form-data">
+            <input type="file" name="file" accept=".doc,.docx,.xls,.xlsx" required>
+            <button type="submit">使用 Aspose 处理</button>
+        </form>
+    </div>
+    
+    <div class="method">
+        <h2>📝 Apache POI 处理 (推荐)</h2>
+        <p>支持 .doc, .docx, .xls, .xlsx, .ppt, .pptx，轻量级解决方案</p>
+        <form action="/api/poi/process" method="post" enctype="multipart/form-data">
+            <input type="file" name="file" accept=".doc,.docx,.xls,.xlsx,.ppt,.pptx" required>
+            <button type="submit">使用 POI 处理</button>
+        </form>
+    </div>
+    
+    <div class="method">
+        <h2>🔧 docx4j 处理</h2>
+        <p>支持 .docx，高级文档处理</p>
+        <form action="/api/docx4j/process" method="post" enctype="multipart/form-data">
+            <input type="file" name="file" accept=".docx" required>
+            <button type="submit">使用 docx4j 处理</button>
+        </form>
+    </div>
+</body>
+</html>
+
+
+
