@@ -338,50 +338,62 @@ public class DocumentProcessor {
      * 这样可以避免直接替换时可能出现的无限循环问题。  
      */
     private void restoreWordTexts(HWPFDocument doc,
-                                    List<TextElement> elements,
-                                    List<String> translatedTexts) {
-
+                                            List<TextElement> elements,
+                                            List<String> translatedTexts) {
         Range range = doc.getRange();
 
-        // 步骤 1: 将原文替换为唯一占位符
-        Map<String, String> placeholderMap = new HashMap<>();
+        // 倒序处理，避免前面改动影响后面索引
+        for (int idx = elements.size() - 1; idx >= 0; idx--) {
+            TextElement el = elements.get(idx);
+            int pIdx = (Integer) el.position.get("paragraphIndex");
+            int rIdx = (Integer) el.position.get("runIndex");
 
-        for (int i = 0; i < elements.size(); i++) {
-            TextElement el = elements.get(i);
-            String oldText = el.text;
+            // 边界检查
+            if (pIdx < 0 || pIdx >= range.numParagraphs()) continue;
+            Paragraph para = range.getParagraph(pIdx);
+            if (rIdx < 0 || rIdx >= para.numCharacterRuns()) continue;
 
-            // 跳过空文本
-            if (oldText == null || oldText.trim().isEmpty()) continue;
+            CharacterRun run = para.getCharacterRun(rIdx);
+            String oldFull = run.text();
+            if (oldFull == null) oldFull = "";
+            boolean hasCR = oldFull.endsWith("\r");
+            // 去掉段尾符得到 core
+            String oldCore = hasCR
+                ? oldFull.substring(0, oldFull.length() - 1)
+                : oldFull;
+            String newCore = translatedTexts.get(idx);
+            if (newCore == null) newCore = "";
 
-            oldText = oldText.replace("\r", "");  // remove CRs
-            oldText = oldText.trim();
+            // 生成本 run 专属 token
+            String token = "__TOKEN__" + idx + "__";
+            String tokenFull = token + (hasCR ? "\r" : "");
+            String newFull   = newCore + (hasCR ? "\r" : "");
 
-            String placeholder = "<<<REPLACE_" + i + ">>>";
-            placeholderMap.put(placeholder, translatedTexts.get(i));
+            // 日志
+            System.out.println("----");
+            System.out.printf("idx=%d para=%d run=%d%n", idx, pIdx, rIdx);
+            System.out.printf("oldFull: \"%s\"%n", showVis(oldFull));
+            System.out.printf("tokenFull: \"%s\"%n", showVis(tokenFull));
+            System.out.printf("newFull: \"%s\"%n", showVis(newFull));
 
-            System.out.println("步骤 1 - 替换:");
-            System.out.println("  原文: \"" + oldText + "\"");
-            System.out.println("  占位符: \"" + placeholder + "\"");
+            // 1) 本 run 内 old->token
+            run.replaceText(oldFull, tokenFull);
+            System.out.printf(" after old->token: \"%s\"%n", showVis(run.text()));
 
-            // 使用 Range 的 replaceText 方法替换原文为占位符
-            range.replaceText(oldText, placeholder);
+            // 2) 本 run 内 token->new
+            run.replaceText(tokenFull, newFull);
+            System.out.printf(" after token->new: \"%s\"%n", showVis(run.text()));
         }
-
-        // 步骤 2: 将占位符替换为翻译后的文本
-        for (Map.Entry<String, String> entry : placeholderMap.entrySet()) {
-            String placeholder = entry.getKey();
-            String translated = entry.getValue();
-
-            System.out.println("步骤 2 - 替换占位符:");
-            System.out.println("  占位符: \"" + placeholder + "\"");
-            System.out.println("  翻译后: \"" + translated + "\"");
-
-            range.replaceText(placeholder, translated);
-        }
-
-        System.out.println("文本恢复完成，翻译结果已写入文档。");
     }
-    
+
+    // 把不可见字符可视化，方便日志阅读
+    private static String showVis(String s) {
+        return s
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t");
+    }
+        
     // 5. Excel XLS处理
     public HSSFWorkbook processExcelXLS(HSSFWorkbook workbook) throws Exception {
         System.out.println("开始批量处理Excel XLS文档");
