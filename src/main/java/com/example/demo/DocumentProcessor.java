@@ -8,11 +8,9 @@ import org.apache.poi.ss.usermodel.CellType;
 import java.util.*;
 import org.apache.poi.hssf.usermodel.*;
 import org.apache.poi.hwpf.HWPFDocument;
-import org.apache.poi.hwpf.usermodel.Range;
+import org.apache.poi.hwpf.usermodel.*;
 import org.apache.poi.xslf.usermodel.*;
 import org.apache.poi.hslf.usermodel.*;
-import org.apache.poi.hslf.usermodel.HSLFTable;
-import org.apache.poi.hslf.usermodel.HSLFTableCell;
 import org.apache.poi.hwpf.extractor.WordExtractor;
 import org.apache.poi.hssf.extractor.ExcelExtractor;
 import java.io.ByteArrayOutputStream;
@@ -287,51 +285,101 @@ public class DocumentProcessor {
     
     // 4. Word DOC处理
     public HWPFDocument processWordDOC(HWPFDocument doc) throws Exception {
-        System.out.println("开始批量处理Word DOC文档");
-        
-        try {
-            // 使用WordExtractor提取文本进行翻译
-            WordExtractor extractor = new WordExtractor(doc);
-            String fullText = extractor.getText();
-            extractor.close();
-            
-            if (fullText != null && !fullText.trim().isEmpty()) {
-                System.out.println("提取到文档文本，长度: " + fullText.length());
-                
-                // 分段处理文本
-                String[] paragraphs = fullText.split("\n");
-                List<String> nonEmptyParagraphs = new ArrayList<>();
-                
-                for (String paragraph : paragraphs) {
-                    if (paragraph != null && !paragraph.trim().isEmpty()) {
-                        nonEmptyParagraphs.add(paragraph.trim());
-                    }
-                }
-                
-                if (!nonEmptyParagraphs.isEmpty()) {
-                    System.out.println("开始翻译 " + nonEmptyParagraphs.size() + " 个段落");
-                    List<String> translatedParagraphs = translateService.batchTranslate(nonEmptyParagraphs);
-                    
-                    // 直接修改原文档的Range
-                    Range range = doc.getRange();
-                    range.delete();
-                    
-                    // 插入翻译后的文本
-                    StringBuilder newContent = new StringBuilder();
-                    for (String paragraph : translatedParagraphs) {
-                        newContent.append(paragraph).append("\r\n");
-                    }
-                    range.insertAfter(newContent.toString());
+        System.out.println("开始批量处理 .doc 文档");
+
+        List<TextElement> elements = extractWordTexts(doc);
+        System.out.println("提取到 " + elements.size() + " 个文本元素");
+
+        // 提取原文去翻译
+        List<String> originals = new ArrayList<>();
+        for (TextElement el : elements) {
+            originals.add(el.text);
+        }
+        // 批量翻译
+        List<String> translated = translateService.batchTranslate(originals);
+
+        // 写回翻译结果
+        restoreWordTexts(doc, elements, translated);
+
+        return doc;
+    }
+
+    /**
+     * 遍历 Range 中的所有段落和 CharacterRun，
+     * 把非空文本以 TextElement 形式保存。
+     */
+    private List<TextElement> extractWordTexts(HWPFDocument doc) {
+        List<TextElement> elements = new ArrayList<>();
+        Range range = doc.getRange();
+        int numParas = range.numParagraphs();
+
+        for (int pIdx = 0; pIdx < numParas; pIdx++) {
+            Paragraph para = range.getParagraph(pIdx);
+            int numRuns = para.numCharacterRuns();
+            for (int rIdx = 0; rIdx < numRuns; rIdx++) {
+                CharacterRun run = para.getCharacterRun(rIdx);
+                String txt = run.text();
+                if (txt != null && !txt.trim().isEmpty()) {
+                    Map<String, Object> pos = new HashMap<>();
+                    pos.put("paragraphIndex", pIdx);
+                    pos.put("runIndex", rIdx);
+                    // type 标记为 "run"
+                    elements.add(new TextElement(txt, "run", pos));
                 }
             }
-            
-            return doc;
-            
-        } catch (Exception e) {
-            System.err.println("DOC处理出错: " + e.getMessage());
-            e.printStackTrace();
-            return doc;
         }
+        return elements;
+    }
+
+    /**
+     * 遍历 Range 中的所有段落和 CharacterRun，
+     * 将原文替换为唯一占位符，
+     * 然后再将占位符替换为翻译后的文本，
+     * 这样可以避免直接替换时可能出现的无限循环问题。  
+     */
+    private void restoreWordTexts(HWPFDocument doc,
+                                    List<TextElement> elements,
+                                    List<String> translatedTexts) {
+
+        Range range = doc.getRange();
+
+        // 步骤 1: 将原文替换为唯一占位符
+        Map<String, String> placeholderMap = new HashMap<>();
+
+        for (int i = 0; i < elements.size(); i++) {
+            TextElement el = elements.get(i);
+            String oldText = el.text;
+
+            // 跳过空文本
+            if (oldText == null || oldText.trim().isEmpty()) continue;
+
+            oldText = oldText.replace("\r", "");  // remove CRs
+            oldText = oldText.trim();
+
+            String placeholder = "<<<REPLACE_" + i + ">>>";
+            placeholderMap.put(placeholder, translatedTexts.get(i));
+
+            System.out.println("步骤 1 - 替换:");
+            System.out.println("  原文: \"" + oldText + "\"");
+            System.out.println("  占位符: \"" + placeholder + "\"");
+
+            // 使用 Range 的 replaceText 方法替换原文为占位符
+            range.replaceText(oldText, placeholder);
+        }
+
+        // 步骤 2: 将占位符替换为翻译后的文本
+        for (Map.Entry<String, String> entry : placeholderMap.entrySet()) {
+            String placeholder = entry.getKey();
+            String translated = entry.getValue();
+
+            System.out.println("步骤 2 - 替换占位符:");
+            System.out.println("  占位符: \"" + placeholder + "\"");
+            System.out.println("  翻译后: \"" + translated + "\"");
+
+            range.replaceText(placeholder, translated);
+        }
+
+        System.out.println("文本恢复完成，翻译结果已写入文档。");
     }
     
     // 5. Excel XLS处理
