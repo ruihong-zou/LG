@@ -332,10 +332,13 @@ public class DocumentProcessor {
     }
 
     /**
-     * 遍历 Range 中的所有段落和 CharacterRun，
-     * 将原文替换为唯一占位符，
-     * 然后再将占位符替换为翻译后的文本，
-     * 这样可以避免直接替换时可能出现的无限循环问题。  
+     * 把翻译结果写回 HWPFDocument。
+     * 遍历 TextElement 列表，
+     * 根据其 position 信息定位到对应的段落和 CharacterRun，
+     * 然后替换文本。
+     * 为了避免直接替换时可能出现的无限循环问题，
+     * 先将原文替换为一个唯一的占位符，
+     * 然后再将占位符替换为翻译后的文本。
      */
     private void restoreWordTexts(HWPFDocument doc,
                                             List<TextElement> elements,
@@ -361,8 +364,11 @@ public class DocumentProcessor {
             String oldCore = hasCR
                 ? oldFull.substring(0, oldFull.length() - 1)
                 : oldFull;
-            String newCore = translatedTexts.get(idx);
-            if (newCore == null) newCore = "";
+                
+            // **关键**：从翻译结果里也去掉任何回车／换行
+            String rawNew = translatedTexts.get(idx);
+            if (rawNew == null) rawNew = "";
+            String newCore = rawNew.replace("\r", "").replace("\n", "");
 
             // 生成本 run 专属 token
             String token = "__TOKEN__" + idx + "__";
