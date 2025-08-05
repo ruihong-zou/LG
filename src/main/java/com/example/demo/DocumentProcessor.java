@@ -311,95 +311,138 @@ public class DocumentProcessor {
     private List<TextElement> extractWordTexts(HWPFDocument doc) {
         List<TextElement> elements = new ArrayList<>();
         Range range = doc.getRange();
-        int numParas = range.numParagraphs();
 
-        for (int pIdx = 0; pIdx < numParas; pIdx++) {
+        // 1.1 普通段落（跳过表格内段落）
+        for (int pIdx = 0; pIdx < range.numParagraphs(); pIdx++) {
             Paragraph para = range.getParagraph(pIdx);
-            int numRuns = para.numCharacterRuns();
-            for (int rIdx = 0; rIdx < numRuns; rIdx++) {
+            if (para.isInTable()) continue;
+            for (int rIdx = 0; rIdx < para.numCharacterRuns(); rIdx++) {
                 CharacterRun run = para.getCharacterRun(rIdx);
                 String txt = run.text();
                 if (txt != null && !txt.trim().isEmpty()) {
-                    Map<String, Object> pos = new HashMap<>();
+                    Map<String,Object> pos = new HashMap<>();
                     pos.put("paragraphIndex", pIdx);
                     pos.put("runIndex", rIdx);
-                    // type 标记为 "run"
                     elements.add(new TextElement(txt, "run", pos));
                 }
             }
         }
+
+        // 1.2 表格：按表格→行→单元格→段落→Run 提取
+        List<Table> tables = new ArrayList<>();
+        TableIterator tit = new TableIterator(range);
+        while (tit.hasNext()) {
+            tables.add(tit.next());
+        }
+        for (int tIdx = 0; tIdx < tables.size(); tIdx++) {
+            Table table = tables.get(tIdx);
+            for (int rowIdx = 0; rowIdx < table.numRows(); rowIdx++) {
+                TableRow row = table.getRow(rowIdx);
+                for (int cellIdx = 0; cellIdx < row.numCells(); cellIdx++) {
+                    TableCell cell = row.getCell(cellIdx);
+                    // 一个单元格可能含多个段落
+                    for (int cp = 0; cp < cell.numParagraphs(); cp++) {
+                        Paragraph cellPara = cell.getParagraph(cp);
+                        for (int cr = 0; cr < cellPara.numCharacterRuns(); cr++) {
+                            CharacterRun run = cellPara.getCharacterRun(cr);
+                            String txt = run.text();
+                            if (txt != null) {
+                                // 去掉控制字符
+                                txt = txt.replaceAll("\\p{Cntrl}", "");
+                            }
+                            if (txt != null && !txt.trim().isEmpty()) {
+                                Map<String,Object> pos = new HashMap<>();
+                                pos.put("tableIndex", tIdx);
+                                pos.put("rowIndex", rowIdx);
+                                pos.put("cellIndex", cellIdx);
+                                pos.put("cellParaIndex", cp);
+                                pos.put("cellRunIndex", cr);
+                                elements.add(new TextElement(txt, "tableCellRun", pos));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         return elements;
     }
 
     /**
-     * 把翻译结果写回 HWPFDocument。
-     * 遍历 TextElement 列表，
-     * 根据其 position 信息定位到对应的段落和 CharacterRun，
-     * 然后替换文本。
-     * 为了避免直接替换时可能出现的无限循环问题，
-     * 先将原文替换为一个唯一的占位符，
-     * 然后再将占位符替换为翻译后的文本。
+     * 根据 TextElement 列表和翻译结果，恢复文档中的文本。
+     * 注意：这里假设翻译结果的顺序与原文一致。
      */
-    private void restoreWordTexts(HWPFDocument doc,
-                                            List<TextElement> elements,
-                                            List<String> translatedTexts) {
-        Range range = doc.getRange();
+    private void restoreWordTexts(HWPFDocument doc,List<TextElement> elements,List<String> translatedTexts) {
+        Range docRange = doc.getRange();
 
-        // 倒序处理，避免前面改动影响后面索引
+        // 2.1 先缓存所有表格
+        List<Table> tables = new ArrayList<>();
+        TableIterator tit = new TableIterator(docRange);
+        while (tit.hasNext()) {
+            tables.add(tit.next());
+        }
+
+        // 2.2 倒序替换
         for (int idx = elements.size() - 1; idx >= 0; idx--) {
             TextElement el = elements.get(idx);
-            int pIdx = (Integer) el.position.get("paragraphIndex");
-            int rIdx = (Integer) el.position.get("runIndex");
+            String newRaw = translatedTexts.get(idx);
+            if (newRaw == null) newRaw = "";
+            // cell.text() 不含 '\n'，我们这里也去掉
+            newRaw = newRaw.replace("\n", "");
 
-            // 边界检查
-            if (pIdx < 0 || pIdx >= range.numParagraphs()) continue;
-            Paragraph para = range.getParagraph(pIdx);
-            if (rIdx < 0 || rIdx >= para.numCharacterRuns()) continue;
+            if ("run".equals(el.type)) {
+                // 普通段落 Run
+                Integer pI = (Integer) el.position.get("paragraphIndex");
+                Integer rI = (Integer) el.position.get("runIndex");
+                if (pI == null || rI == null) continue;
+                if (pI < 0 || pI >= docRange.numParagraphs()) continue;
+                Paragraph para = docRange.getParagraph(pI);
+                if (rI < 0 || rI >= para.numCharacterRuns()) continue;
 
-            CharacterRun run = para.getCharacterRun(rIdx);
-            String oldFull = run.text();
-            if (oldFull == null) oldFull = "";
-            boolean hasCR = oldFull.endsWith("\r");
-            // 去掉段尾符得到 core
-            String oldCore = hasCR
-                ? oldFull.substring(0, oldFull.length() - 1)
-                : oldFull;
-                
-            // **关键**：从翻译结果里也去掉任何回车／换行
-            String rawNew = translatedTexts.get(idx);
-            if (rawNew == null) rawNew = "";
-            String newCore = rawNew.replace("\r", "").replace("\n", "");
+                CharacterRun run = para.getCharacterRun(rI);
+                String oldFull = run.text();
+                if (oldFull == null) oldFull = "";
+                boolean hasCR = oldFull.endsWith("\r");
 
-            // 生成本 run 专属 token
-            String token = "__TOKEN__" + idx + "__";
-            String tokenFull = token + (hasCR ? "\r" : "");
-            String newFull   = newCore + (hasCR ? "\r" : "");
+                String token = "__T" + idx + "__";
+                String tokenFull = token + (hasCR ? "\r" : "");
+                String newFull   = newRaw + (hasCR ? "\r" : "");
 
-            // 日志
-            System.out.println("----");
-            System.out.printf("idx=%d para=%d run=%d%n", idx, pIdx, rIdx);
-            System.out.printf("oldFull: \"%s\"%n", showVis(oldFull));
-            System.out.printf("tokenFull: \"%s\"%n", showVis(tokenFull));
-            System.out.printf("newFull: \"%s\"%n", showVis(newFull));
+                run.replaceText(oldFull, tokenFull);
+                run.replaceText(tokenFull, newFull);
 
-            // 1) 本 run 内 old->token
-            run.replaceText(oldFull, tokenFull);
-            System.out.printf(" after old->token: \"%s\"%n", showVis(run.text()));
+            } else if ("tableCellRun".equals(el.type)) {
+                // 表格单元格内的 Run
+                Integer tI  = (Integer) el.position.get("tableIndex");
+                Integer rI  = (Integer) el.position.get("rowIndex");
+                Integer cI  = (Integer) el.position.get("cellIndex");
+                Integer cpI = (Integer) el.position.get("cellParaIndex");
+                Integer crI = (Integer) el.position.get("cellRunIndex");
+                if (tI==null||rI==null||cI==null||cpI==null||crI==null) continue;
+                if (tI<0||tI>=tables.size()) continue;
 
-            // 2) 本 run 内 token->new
-            run.replaceText(tokenFull, newFull);
-            System.out.printf(" after token->new: \"%s\"%n", showVis(run.text()));
+                TableCell cell = tables.get(tI)
+                                    .getRow(rI)
+                                    .getCell(cI);
+                // 找到单元格内对应段落和 run
+                Paragraph cellPara = cell.getParagraph(cpI);
+                if (crI < 0 || crI >= cellPara.numCharacterRuns()) continue;
+                CharacterRun run = cellPara.getCharacterRun(crI);
+
+                String oldFull = run.text().replaceAll("\\p{Cntrl}", "");
+                boolean hasCR = oldFull.endsWith("\r");
+
+                String token = "__T" + idx + "__";
+                String tokenFull = token + (hasCR ? "\r" : "");
+                String newFull   = newRaw + (hasCR ? "\r" : "");
+
+                run.replaceText(oldFull, tokenFull);
+                run.replaceText(tokenFull, newFull);
+            }
         }
     }
 
-    // 把不可见字符可视化，方便日志阅读
-    private static String showVis(String s) {
-        return s
-        .replace("\r", "\\r")
-        .replace("\n", "\\n")
-        .replace("\t", "\\t");
-    }
-        
+
     // 5. Excel XLS处理
     public HSSFWorkbook processExcelXLS(HSSFWorkbook workbook) throws Exception {
         System.out.println("开始批量处理Excel XLS文档");
