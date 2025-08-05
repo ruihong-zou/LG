@@ -11,6 +11,8 @@ import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.usermodel.Range;
 import org.apache.poi.xslf.usermodel.*;
 import org.apache.poi.hslf.usermodel.*;
+import org.apache.poi.hslf.usermodel.HSLFTable;
+import org.apache.poi.hslf.usermodel.HSLFTableCell;
 import org.apache.poi.hwpf.extractor.WordExtractor;
 import org.apache.poi.hssf.extractor.ExcelExtractor;
 import java.io.ByteArrayOutputStream;
@@ -56,6 +58,7 @@ public class DocumentProcessor {
     private List<TextElement> extractWordTexts(XWPFDocument doc) {
         List<TextElement> elements = new ArrayList<>();
         
+        // 处理段落
         for (int i = 0; i < doc.getParagraphs().size(); i++) {
             XWPFParagraph paragraph = doc.getParagraphs().get(i);
             for (int j = 0; j < paragraph.getRuns().size(); j++) {
@@ -69,17 +72,55 @@ public class DocumentProcessor {
                 }
             }
         }
+        
+        // 处理表格
+        for (int tableIndex = 0; tableIndex < doc.getTables().size(); tableIndex++) {
+            XWPFTable table = doc.getTables().get(tableIndex);
+            for (int rowIndex = 0; rowIndex < table.getRows().size(); rowIndex++) {
+                XWPFTableRow row = table.getRows().get(rowIndex);
+                for (int cellIndex = 0; cellIndex < row.getTableCells().size(); cellIndex++) {
+                    XWPFTableCell cell = row.getTableCells().get(cellIndex);
+                    String cellText = cell.getText();
+                    if (cellText != null && !cellText.trim().isEmpty()) {
+                        Map<String, Object> position = new HashMap<>();
+                        position.put("tableIndex", tableIndex);
+                        position.put("rowIndex", rowIndex);
+                        position.put("cellIndex", cellIndex);
+                        elements.add(new TextElement(cellText, "tableCell", position));
+                    }
+                }
+            }
+        }
+        
         return elements;
     }
     
     private void restoreWordTexts(XWPFDocument doc, List<TextElement> elements, List<String> translatedTexts) {
         for (int i = 0; i < elements.size(); i++) {
             TextElement element = elements.get(i);
-            int paragraphIndex = (Integer) element.position.get("paragraphIndex");
-            int runIndex = (Integer) element.position.get("runIndex");
+            String translatedText = translatedTexts.get(i);
             
-            XWPFRun run = doc.getParagraphs().get(paragraphIndex).getRuns().get(runIndex);
-            run.setText(translatedTexts.get(i), 0);
+            if ("run".equals(element.type)) {
+                int paragraphIndex = (Integer) element.position.get("paragraphIndex");
+                int runIndex = (Integer) element.position.get("runIndex");
+                
+                XWPFRun run = doc.getParagraphs().get(paragraphIndex).getRuns().get(runIndex);
+                run.setText(translatedText, 0);
+                
+            } else if ("tableCell".equals(element.type)) {
+                int tableIndex = (Integer) element.position.get("tableIndex");
+                int rowIndex = (Integer) element.position.get("rowIndex");
+                int cellIndex = (Integer) element.position.get("cellIndex");
+                
+                XWPFTable table = doc.getTables().get(tableIndex);
+                XWPFTableCell cell = table.getRows().get(rowIndex).getTableCells().get(cellIndex);
+                
+                // 清除原有内容并设置新文本
+                cell.removeParagraph(0);
+                XWPFParagraph newParagraph = cell.addParagraph();
+                XWPFRun newRun = newParagraph.createRun();
+                newRun.setText(translatedText);
+            }
         }
     }
     
@@ -163,6 +204,7 @@ public class DocumentProcessor {
             XSLFSlide slide = ppt.getSlides().get(slideIndex);
             for (int shapeIndex = 0; shapeIndex < slide.getShapes().size(); shapeIndex++) {
                 XSLFShape shape = slide.getShapes().get(shapeIndex);
+                
                 if (shape instanceof XSLFTextShape) {
                     XSLFTextShape textShape = (XSLFTextShape) shape;
                     
@@ -181,6 +223,24 @@ public class DocumentProcessor {
                             }
                         }
                     }
+                } else if (shape instanceof XSLFTable) {
+                    XSLFTable table = (XSLFTable) shape;
+                    
+                    for (int rowIndex = 0; rowIndex < table.getRows().size(); rowIndex++) {
+                        XSLFTableRow row = table.getRows().get(rowIndex);
+                        for (int cellIndex = 0; cellIndex < row.getCells().size(); cellIndex++) {
+                            XSLFTableCell cell = row.getCells().get(cellIndex);
+                            String cellText = cell.getText();
+                            if (cellText != null && !cellText.trim().isEmpty()) {
+                                Map<String, Object> position = new HashMap<>();
+                                position.put("slideIndex", slideIndex);
+                                position.put("shapeIndex", shapeIndex);
+                                position.put("rowIndex", rowIndex);
+                                position.put("cellIndex", cellIndex);
+                                elements.add(new TextElement(cellText, "tableCell", position));
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -190,19 +250,37 @@ public class DocumentProcessor {
     private void restorePPTXTexts(XMLSlideShow ppt, List<TextElement> elements, List<String> translatedTexts) {
         for (int i = 0; i < elements.size(); i++) {
             TextElement element = elements.get(i);
-            int slideIndex = (Integer) element.position.get("slideIndex");
-            int shapeIndex = (Integer) element.position.get("shapeIndex");
-            int paragraphIndex = (Integer) element.position.get("paragraphIndex");
-            int runIndex = (Integer) element.position.get("runIndex");
+            String translatedText = translatedTexts.get(i);
             
-            XSLFSlide slide = ppt.getSlides().get(slideIndex);
-            XSLFShape shape = slide.getShapes().get(shapeIndex);
-            if (shape instanceof XSLFTextShape) {
-                XSLFTextShape textShape = (XSLFTextShape) shape;
-                XSLFTextParagraph paragraph = textShape.getTextParagraphs().get(paragraphIndex);
-                XSLFTextRun run = paragraph.getTextRuns().get(runIndex);
+            if ("textRun".equals(element.type)) {
+                int slideIndex = (Integer) element.position.get("slideIndex");
+                int shapeIndex = (Integer) element.position.get("shapeIndex");
+                int paragraphIndex = (Integer) element.position.get("paragraphIndex");
+                int runIndex = (Integer) element.position.get("runIndex");
                 
-                run.setText(translatedTexts.get(i));
+                XSLFSlide slide = ppt.getSlides().get(slideIndex);
+                XSLFShape shape = slide.getShapes().get(shapeIndex);
+                if (shape instanceof XSLFTextShape) {
+                    XSLFTextShape textShape = (XSLFTextShape) shape;
+                    XSLFTextParagraph paragraph = textShape.getTextParagraphs().get(paragraphIndex);
+                    XSLFTextRun run = paragraph.getTextRuns().get(runIndex);
+                    
+                    run.setText(translatedText);
+                }
+            } else if ("tableCell".equals(element.type)) {
+                int slideIndex = (Integer) element.position.get("slideIndex");
+                int shapeIndex = (Integer) element.position.get("shapeIndex");
+                int rowIndex = (Integer) element.position.get("rowIndex");
+                int cellIndex = (Integer) element.position.get("cellIndex");
+                
+                XSLFSlide slide = ppt.getSlides().get(slideIndex);
+                XSLFShape shape = slide.getShapes().get(shapeIndex);
+                if (shape instanceof XSLFTable) {
+                    XSLFTable table = (XSLFTable) shape;
+                    XSLFTableCell cell = table.getRows().get(rowIndex).getCells().get(cellIndex);
+                    cell.clearText();
+                    cell.setText(translatedText);
+                }
             }
         }
     }
@@ -211,105 +289,74 @@ public class DocumentProcessor {
     public HWPFDocument processWordDOC(HWPFDocument doc) throws Exception {
         System.out.println("开始批量处理Word DOC文档");
         
-            List<TextElement> elements = extractDOCTexts(doc);
-            System.out.println("提取到 " + elements.size() + " 个文本元素");
-            
-            List<String> texts = new ArrayList<>();
-            for (TextElement element : elements) {
-                texts.add(element.text);
-            }
-            List<String> translatedTexts = translateService.batchTranslate(texts);
-            
-            restoreDOCTexts(doc, elements, translatedTexts);
-            return doc;
-    }
-    
-    private List<TextElement> extractDOCTexts(HWPFDocument doc) {
-        List<TextElement> elements = new ArrayList<>();
-        
-            Range range = doc.getRange();
-            for (int i = 0; i < range.numParagraphs(); i++) {
-                org.apache.poi.hwpf.usermodel.Paragraph paragraph = range.getParagraph(i);
-                String text = paragraph.text();
-                if (text != null && !text.trim().isEmpty()) {
-                    Map<String, Object> position = new HashMap<>();
-                    position.put("paragraphIndex", i);
-                    position.put("originalText", text);
-                    elements.add(new TextElement(text, "paragraph", position));
-                }
-            }
-
-        return elements;
-    }
-    
-    private void restoreDOCTexts(HWPFDocument doc, List<TextElement> elements, List<String> translatedTexts) {
-        System.out.println("=== restoreDOCTexts 开始执行 ===");
-        
         try {
-            System.out.println("步骤1: 获取Range对象...");
-            Range range = doc.getRange();
-            System.out.println("步骤1: Range对象获取成功，范围长度: " + range.text().length());
+            // 使用WordExtractor提取文本进行翻译
+            WordExtractor extractor = new WordExtractor(doc);
+            String fullText = extractor.getText();
+            extractor.close();
             
-            System.out.println("步骤2: 按照Apache POI官方方式进行文本替换...");
-            
-            // 按照官方测试用例的方式，直接在range上进行替换
-            for (int i = 0; i < elements.size(); i++) {
-                TextElement element = elements.get(i);
-                String originalText = (String) element.position.get("originalText");
-                String translatedText = translatedTexts.get(i);
+            if (fullText != null && !fullText.trim().isEmpty()) {
+                System.out.println("提取到文档文本，长度: " + fullText.length());
                 
-                System.out.println("步骤3." + i + ": 替换文本 [" + originalText.substring(0, Math.min(30, originalText.length())) + "...]");
+                // 分段处理文本
+                String[] paragraphs = fullText.split("\n");
+                List<String> nonEmptyParagraphs = new ArrayList<>();
                 
-                try {
-                    // 使用官方推荐的方式：直接在range上替换
-                    range.replaceText(originalText, translatedText);
-                    System.out.println("步骤3." + i + ": 替换成功");
-                } catch (Exception e) {
-                    System.err.println("步骤3." + i + ": 替换失败 - " + e.getMessage());
-                    // 继续处理下一个，不中断整个流程
+                for (String paragraph : paragraphs) {
+                    if (paragraph != null && !paragraph.trim().isEmpty()) {
+                        nonEmptyParagraphs.add(paragraph.trim());
+                    }
+                }
+                
+                if (!nonEmptyParagraphs.isEmpty()) {
+                    System.out.println("开始翻译 " + nonEmptyParagraphs.size() + " 个段落");
+                    List<String> translatedParagraphs = translateService.batchTranslate(nonEmptyParagraphs);
+                    
+                    // 直接修改原文档的Range
+                    Range range = doc.getRange();
+                    range.delete();
+                    
+                    // 插入翻译后的文本
+                    StringBuilder newContent = new StringBuilder();
+                    for (String paragraph : translatedParagraphs) {
+                        newContent.append(paragraph).append("\r\n");
+                    }
+                    range.insertAfter(newContent.toString());
                 }
             }
             
-            System.out.println("DOC文档文本替换完成");
+            return doc;
             
         } catch (Exception e) {
-            System.err.println("=== DOC文本替换出错 ===");
-            System.err.println("错误信息: " + e.getMessage());
+            System.err.println("DOC处理出错: " + e.getMessage());
             e.printStackTrace();
+            return doc;
         }
-        
-        System.out.println("=== restoreDOCTexts 执行结束 ===");
     }
     
     // 5. Excel XLS处理
     public HSSFWorkbook processExcelXLS(HSSFWorkbook workbook) throws Exception {
         System.out.println("开始批量处理Excel XLS文档");
         
-        ExcelExtractor extractor = new ExcelExtractor(workbook);
-        extractor.setFormulasNotResults(false);
-        extractor.setIncludeSheetNames(false);
-        String text = extractor.getText();
-        extractor.close();
+        List<TextElement> elements = extractXLSTexts(workbook);
+        System.out.println("提取到 " + elements.size() + " 个单元格文本");
         
-        if (text != null && !text.trim().isEmpty()) {
-            String[] lines = text.split("\n");
-            List<String> texts = new ArrayList<>();
-            for (String line : lines) {
-                if (line != null && !line.trim().isEmpty()) {
-                    texts.add(line.trim());
-                }
-            }
-            
-            if (!texts.isEmpty()) {
-                List<String> translatedTexts = translateService.batchTranslate(texts);
-                restoreXLSTextsFromExtractor(workbook, texts, translatedTexts);
-            }
+        List<String> texts = new ArrayList<>();
+        for (TextElement element : elements) {
+            texts.add(element.text);
+        }
+        
+        if (!texts.isEmpty()) {
+            List<String> translatedTexts = translateService.batchTranslate(texts);
+            restoreXLSTexts(workbook, elements, translatedTexts);
         }
         
         return workbook;
     }
-    
-    private void restoreXLSTextsFromExtractor(HSSFWorkbook workbook, List<String> originalTexts, List<String> translatedTexts) {
+
+    private List<TextElement> extractXLSTexts(HSSFWorkbook workbook) {
+        List<TextElement> elements = new ArrayList<>();
+        
         for (int sheetIndex = 0; sheetIndex < workbook.getNumberOfSheets(); sheetIndex++) {
             HSSFSheet sheet = workbook.getSheetAt(sheetIndex);
             for (int rowNum = 0; rowNum <= sheet.getLastRowNum(); rowNum++) {
@@ -318,19 +365,31 @@ public class DocumentProcessor {
                     for (int cellNum = 0; cellNum < row.getLastCellNum(); cellNum++) {
                         HSSFCell cell = row.getCell(cellNum);
                         if (cell != null && cell.getCellType() == CellType.STRING) {
-                            String cellValue = cell.getStringCellValue().trim();
-                            if (cellValue != null && !cellValue.isEmpty()) {
-                                for (int i = 0; i < originalTexts.size(); i++) {
-                                    if (originalTexts.get(i).equals(cellValue)) {
-                                        cell.setCellValue(translatedTexts.get(i));
-                                        break;
-                                    }
-                                }
+                            String text = cell.getStringCellValue();
+                            if (text != null && !text.trim().isEmpty()) {
+                                Map<String, Object> position = new HashMap<>();
+                                position.put("sheetIndex", sheetIndex);
+                                position.put("rowIndex", rowNum);
+                                position.put("cellIndex", cellNum);
+                                elements.add(new TextElement(text, "cell", position));
                             }
                         }
                     }
                 }
             }
+        }
+        return elements;
+    }
+
+    private void restoreXLSTexts(HSSFWorkbook workbook, List<TextElement> elements, List<String> translatedTexts) {
+        for (int i = 0; i < elements.size(); i++) {
+            TextElement element = elements.get(i);
+            int sheetIndex = (Integer) element.position.get("sheetIndex");
+            int rowIndex = (Integer) element.position.get("rowIndex");
+            int cellIndex = (Integer) element.position.get("cellIndex");
+            
+            HSSFCell cell = workbook.getSheetAt(sheetIndex).getRow(rowIndex).getCell(cellIndex);
+            cell.setCellValue(translatedTexts.get(i));
         }
     }
     
@@ -368,6 +427,25 @@ public class DocumentProcessor {
                         position.put("shapeIndex", shapeIndex);
                         elements.add(new TextElement(text, "textShape", position));
                     }
+                } else if (shape instanceof HSLFTable) {
+                    HSLFTable table = (HSLFTable) shape;
+                    
+                    for (int rowIndex = 0; rowIndex < table.getNumberOfRows(); rowIndex++) {
+                        for (int cellIndex = 0; cellIndex < table.getNumberOfColumns(); cellIndex++) {
+                            HSLFTableCell cell = table.getCell(rowIndex, cellIndex);
+                            if (cell != null) {
+                                String cellText = cell.getText();
+                                if (cellText != null && !cellText.trim().isEmpty()) {
+                                    Map<String, Object> position = new HashMap<>();
+                                    position.put("slideIndex", slideIndex);
+                                    position.put("shapeIndex", shapeIndex);
+                                    position.put("rowIndex", rowIndex);
+                                    position.put("cellIndex", cellIndex);
+                                    elements.add(new TextElement(cellText, "tableCell", position));
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -377,14 +455,33 @@ public class DocumentProcessor {
     private void restorePPTTexts(HSLFSlideShow ppt, List<TextElement> elements, List<String> translatedTexts) {
         for (int i = 0; i < elements.size(); i++) {
             TextElement element = elements.get(i);
-            int slideIndex = (Integer) element.position.get("slideIndex");
-            int shapeIndex = (Integer) element.position.get("shapeIndex");
+            String translatedText = translatedTexts.get(i);
             
-            HSLFSlide slide = ppt.getSlides().get(slideIndex);
-            HSLFShape shape = slide.getShapes().get(shapeIndex);
-            if (shape instanceof HSLFTextShape) {
-                HSLFTextShape textShape = (HSLFTextShape) shape;
-                textShape.setText(translatedTexts.get(i));
+            if ("textShape".equals(element.type)) {
+                int slideIndex = (Integer) element.position.get("slideIndex");
+                int shapeIndex = (Integer) element.position.get("shapeIndex");
+                
+                HSLFSlide slide = ppt.getSlides().get(slideIndex);
+                HSLFShape shape = slide.getShapes().get(shapeIndex);
+                if (shape instanceof HSLFTextShape) {
+                    HSLFTextShape textShape = (HSLFTextShape) shape;
+                    textShape.setText(translatedText);
+                }
+            } else if ("tableCell".equals(element.type)) {
+                int slideIndex = (Integer) element.position.get("slideIndex");
+                int shapeIndex = (Integer) element.position.get("shapeIndex");
+                int rowIndex = (Integer) element.position.get("rowIndex");
+                int cellIndex = (Integer) element.position.get("cellIndex");
+                
+                HSLFSlide slide = ppt.getSlides().get(slideIndex);
+                HSLFShape shape = slide.getShapes().get(shapeIndex);
+                if (shape instanceof HSLFTable) {
+                    HSLFTable table = (HSLFTable) shape;
+                    HSLFTableCell cell = table.getCell(rowIndex, cellIndex);
+                    if (cell != null) {
+                        cell.setText(translatedText);
+                    }
+                }
             }
         }
     }

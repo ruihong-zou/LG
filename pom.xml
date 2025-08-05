@@ -69,7 +69,7 @@
             <version>11.4.9</version>
         </dependency>
         
-        <!-- Apache POI for PowerPoint -->
+        <!-- Apache POI for Word DOC -->
         <dependency>
             <groupId>org.apache.poi</groupId>
             <artifactId>poi-scratchpad</artifactId>

@@ -38,6 +38,8 @@ import org.apache.poi.hssf.extractor.ExcelExtractor;
 
 import java.io.ByteArrayOutputStream;
 import java.util.HashMap;
+import java.util.List;
+import java.util.ArrayList;
 
 @RestController
 @RequestMapping("/api")
@@ -45,6 +47,9 @@ public class DocumentController {
     
     @Autowired
     private DocumentProcessor documentProcessor;
+    
+    @Autowired
+    private TranslateService translateService;
     
     @GetMapping("/")
     public String home() {
@@ -168,27 +173,58 @@ public class DocumentController {
         System.out.println("处理Word DOC文件 - 使用批量翻译");
         
         try {
-            // 尝试作为传统DOC格式处理
-            HWPFDocument doc = new HWPFDocument(file.getInputStream());
+            // 首先尝试用WordExtractor提取文本，然后创建DOCX
+            WordExtractor extractor = new WordExtractor(file.getInputStream());
+            String text = extractor.getText();
+            extractor.close();
             
-            doc = documentProcessor.processWordDOC(doc);
-            
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            doc.write(out);
-            doc.close();
-            
-            return ResponseEntity.ok()
-                    .header("Content-Disposition", "attachment; filename=batch-translated.doc")
-                    .body(out.toByteArray());
+            if (text != null && !text.trim().isEmpty()) {
+                System.out.println("提取到文本，长度: " + text.length() + "，转换为DOCX格式");
                 
-        } catch (IllegalArgumentException e) {
-            // 如果是OOXML格式，说明实际是DOCX文件，使用DOCX处理逻辑
-            if (e.getMessage().contains("OOXML")) {
-                System.out.println("检测到文件实际为DOCX格式，切换到DOCX处理逻辑");
-                return processWordDOCX(file);
-            } else {
-                throw e;
+                // 分段处理
+                String[] paragraphs = text.split("\n");
+                List<String> nonEmptyParagraphs = new ArrayList<>();
+                
+                for (String paragraph : paragraphs) {
+                    if (paragraph != null && !paragraph.trim().isEmpty()) {
+                        nonEmptyParagraphs.add(paragraph.trim());
+                    }
+                }
+                
+                if (!nonEmptyParagraphs.isEmpty()) {
+                    List<String> translatedParagraphs = translateService.batchTranslate(nonEmptyParagraphs);
+                    
+                    // 创建新的DOCX文档（更稳定）
+                    XWPFDocument newDoc = new XWPFDocument();
+                    for (String translatedParagraph : translatedParagraphs) {
+                        XWPFParagraph paragraph = newDoc.createParagraph();
+                        XWPFRun run = paragraph.createRun();
+                        run.setText(translatedParagraph);
+                    }
+                    
+                    ByteArrayOutputStream out = new ByteArrayOutputStream();
+                    newDoc.write(out);
+                    newDoc.close();
+                    
+                    return ResponseEntity.ok()
+                            .header("Content-Disposition", "attachment; filename=batch-translated-from-doc.docx")
+                            .body(out.toByteArray());
+                }
             }
+            
+            // 如果提取失败，返回错误信息
+            throw new RuntimeException("无法从DOC文件中提取文本内容");
+            
+        } catch (Exception e) {
+            System.err.println("DOC处理失败: " + e.getMessage());
+            
+            // 检查是否是格式问题
+            if (e.getMessage().contains("OOXML") || e.getMessage().contains("RTF")) {
+                System.out.println("检测到文件可能是其他格式，尝试DOCX处理");
+                return processWordDOCX(file);
+            }
+            
+            throw new RuntimeException("DOC文件处理失败: " + e.getMessage());
         }
     }
     
