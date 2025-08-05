@@ -11,6 +11,7 @@ import org.apache.poi.xssf.usermodel.XSSFCell;
 import org.apache.poi.ss.usermodel.CellType;
 import org.docx4j.openpackaging.packages.WordprocessingMLPackage;
 import org.docx4j.openpackaging.parts.WordprocessingML.MainDocumentPart;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -32,6 +33,8 @@ import org.apache.poi.hslf.usermodel.HSLFTextParagraph;
 import org.apache.poi.sl.extractor.SlideShowExtractor;
 import org.apache.poi.sl.usermodel.SlideShow;
 import org.apache.poi.sl.usermodel.SlideShowFactory;
+import org.apache.poi.hwpf.extractor.WordExtractor;
+import org.apache.poi.hssf.extractor.ExcelExtractor;
 
 import java.io.ByteArrayOutputStream;
 import java.util.HashMap;
@@ -39,6 +42,9 @@ import java.util.HashMap;
 @RestController
 @RequestMapping("/api")
 public class DocumentController {
+    
+    @Autowired
+    private DocumentProcessor documentProcessor;
     
     @GetMapping("/")
     public String home() {
@@ -104,146 +110,126 @@ public class DocumentController {
     }
     
     private ResponseEntity<byte[]> processExcelXLSX(MultipartFile file) throws Exception {
-        System.out.println("处理Excel XLSX文件");
+        System.out.println("处理Excel XLSX文件 - 使用批量翻译");
         XSSFWorkbook workbook = new XSSFWorkbook(file.getInputStream());
         
-        for (int i = 0; i < workbook.getNumberOfSheets(); i++) {
-            XSSFSheet sheet = workbook.getSheetAt(i);
-            for (int rowNum = 0; rowNum <= sheet.getLastRowNum(); rowNum++) {
-                XSSFRow row = sheet.getRow(rowNum);
-                if (row != null) {
-                    for (int cellNum = 0; cellNum < row.getLastCellNum(); cellNum++) {
-                        XSSFCell cell = row.getCell(cellNum);
-                        if (cell != null && cell.getCellType() == CellType.STRING) {
-                            String cellValue = cell.getStringCellValue();
-                            if (cellValue != null && !cellValue.trim().isEmpty()) {
-                                cell.setCellValue("[翻译]" + cellValue);
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // 使用新的批量处理逻辑
+        workbook = documentProcessor.processExcelDocument(workbook);
         
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         workbook.write(out);
         workbook.close();
         
         return ResponseEntity.ok()
-                .header("Content-Disposition", "attachment; filename=poi-processed.xlsx")
+                .header("Content-Disposition", "attachment; filename=batch-translated.xlsx")
                 .body(out.toByteArray());
     }
     
     private ResponseEntity<byte[]> processExcelXLS(MultipartFile file) throws Exception {
-        System.out.println("处理Excel XLS文件");
-        HSSFWorkbook workbook = new HSSFWorkbook(file.getInputStream());
+        System.out.println("处理Excel XLS文件 - 使用批量翻译");
         
-        for (int i = 0; i < workbook.getNumberOfSheets(); i++) {
-            HSSFSheet sheet = workbook.getSheetAt(i);
-            for (int rowNum = 0; rowNum <= sheet.getLastRowNum(); rowNum++) {
-                HSSFRow row = sheet.getRow(rowNum);
-                if (row != null) {
-                    for (int cellNum = 0; cellNum < row.getLastCellNum(); cellNum++) {
-                        HSSFCell cell = row.getCell(cellNum);
-                        if (cell != null && cell.getCellType() == CellType.STRING) {
-                            String cellValue = cell.getStringCellValue();
-                            if (cellValue != null && !cellValue.trim().isEmpty()) {
-                                cell.setCellValue("[翻译]" + cellValue);
-                            }
-                        }
-                    }
-                }
-            }
+        try {
+            // 尝试作为传统XLS格式处理
+            HSSFWorkbook workbook = new HSSFWorkbook(file.getInputStream());
+            workbook = documentProcessor.processExcelXLS(workbook);
+            
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            workbook.write(out);
+            workbook.close();
+            
+            return ResponseEntity.ok()
+                    .header("Content-Disposition", "attachment; filename=batch-translated.xls")
+                    .body(out.toByteArray());
+                    
+        } catch (org.apache.poi.poifs.filesystem.OfficeXmlFileException e) {
+            // 如果是XML格式，说明实际是XLSX文件，使用XLSX处理逻辑
+            System.out.println("检测到文件实际为XLSX格式，切换到XLSX处理逻辑");
+            return processExcelXLSX(file);
         }
-        
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        workbook.write(out);
-        workbook.close();
-        
-        return ResponseEntity.ok()
-                .header("Content-Disposition", "attachment; filename=poi-processed.xls")
-                .body(out.toByteArray());
     }
     
     private ResponseEntity<byte[]> processWordDOCX(MultipartFile file) throws Exception {
-        System.out.println("处理Word DOCX文件");
+        System.out.println("处理Word DOCX文件 - 使用批量翻译");
         XWPFDocument doc = new XWPFDocument(file.getInputStream());
         
-        for (XWPFParagraph paragraph : doc.getParagraphs()) {
-            for (XWPFRun run : paragraph.getRuns()) {
-                String text = run.getText(0);
-                if (text != null && !text.trim().isEmpty()) {
-                    run.setText("[翻译]" + text, 0);
-                }
-            }
-        }
+        // 使用新的批量处理逻辑
+        doc = documentProcessor.processWordDocument(doc);
         
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         doc.write(out);
         doc.close();
         
         return ResponseEntity.ok()
-                .header("Content-Disposition", "attachment; filename=poi-processed.docx")
+                .header("Content-Disposition", "attachment; filename=batch-translated.docx")
                 .body(out.toByteArray());
     }
     
     private ResponseEntity<byte[]> processWordDOC(MultipartFile file) throws Exception {
-        System.out.println("处理Word DOC文件");
-        HWPFDocument doc = new HWPFDocument(file.getInputStream());
-        Range range = doc.getRange();
+        System.out.println("处理Word DOC文件 - 使用批量翻译");
         
-        // 获取文档文本并添加翻译标记
-        String text = range.text();
-        if (text != null && !text.trim().isEmpty()) {
-            // 简单的文本替换处理
-            String[] paragraphs = text.split("\r");
-            StringBuilder processedText = new StringBuilder();
-            for (String paragraph : paragraphs) {
-                if (!paragraph.trim().isEmpty()) {
-                    processedText.append("[翻译]").append(paragraph).append("\r");
-                } else {
-                    processedText.append(paragraph).append("\r");
-                }
+        try {
+            // 尝试作为传统DOC格式处理
+            HWPFDocument doc = new HWPFDocument(file.getInputStream());
+            
+            doc = documentProcessor.processWordDOC(doc);
+            
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.write(out);
+            doc.close();
+            
+            return ResponseEntity.ok()
+                    .header("Content-Disposition", "attachment; filename=batch-translated.doc")
+                    .body(out.toByteArray());
+                
+        } catch (IllegalArgumentException e) {
+            // 如果是OOXML格式，说明实际是DOCX文件，使用DOCX处理逻辑
+            if (e.getMessage().contains("OOXML")) {
+                System.out.println("检测到文件实际为DOCX格式，切换到DOCX处理逻辑");
+                return processWordDOCX(file);
+            } else {
+                throw e;
             }
-            range.replaceText(text, processedText.toString());
         }
-        
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        doc.write(out);
-        doc.close();
-        
-        return ResponseEntity.ok()
-                .header("Content-Disposition", "attachment; filename=poi-processed.doc")
-                .body(out.toByteArray());
     }
     
     private ResponseEntity<byte[]> processPowerPointPPTX(MultipartFile file) throws Exception {
-        System.out.println("处理PowerPoint PPTX文件");
+        System.out.println("处理PowerPoint PPTX文件 - 使用批量翻译");
+        XMLSlideShow ppt = new XMLSlideShow(file.getInputStream());
         
-        // 使用通用的SlideShowFactory
-        SlideShow<?,?> slideShow = SlideShowFactory.create(file.getInputStream());
-        SlideShowExtractor extractor = new SlideShowExtractor(slideShow);
+        // 使用新的批量处理逻辑
+        ppt = documentProcessor.processPowerPointPPTX(ppt);
         
-        // 提取文本并添加翻译标记
-        String originalText = extractor.getText();
-        String translatedText = "[翻译]" + originalText.replaceAll("\n", "\n[翻译]");
-        
-        // 这里需要重新构建幻灯片，或者直接返回文本文件
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        slideShow.write(out);
-        slideShow.close();
-        extractor.close();
+        ppt.write(out);
+        ppt.close();
         
         return ResponseEntity.ok()
-                .header("Content-Disposition", "attachment; filename=poi-processed.pptx")
+                .header("Content-Disposition", "attachment; filename=batch-translated.pptx")
                 .body(out.toByteArray());
     }
     
     private ResponseEntity<byte[]> processPowerPointPPT(MultipartFile file) throws Exception {
-        System.out.println("处理PowerPoint PPT文件");
+        System.out.println("处理PowerPoint PPT文件 - 使用批量翻译");
         
-        // 使用相同的通用方法
-        return processPowerPointPPTX(file);
+        try {
+            HSLFSlideShow ppt = new HSLFSlideShow(file.getInputStream());
+            
+            // 使用新的批量处理逻辑
+            ppt = documentProcessor.processPowerPointPPT(ppt);
+            
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            ppt.write(out);
+            ppt.close();
+            
+            return ResponseEntity.ok()
+                    .header("Content-Disposition", "attachment; filename=batch-translated.ppt")
+                    .body(out.toByteArray());
+                
+        } catch (org.apache.poi.poifs.filesystem.OfficeXmlFileException e) {
+            // 如果是XML格式，说明实际是PPTX文件，使用PPTX处理逻辑
+            System.out.println("检测到文件实际为PPTX格式，切换到PPTX处理逻辑");
+            return processPowerPointPPTX(file);
+        }
     }
     
     // docx4j 处理方法
