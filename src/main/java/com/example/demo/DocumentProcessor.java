@@ -3,6 +3,7 @@ package com.example.demo;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.apache.poi.xwpf.usermodel.*;
+import org.checkerframework.checker.units.qual.s;
 import org.apache.poi.xssf.usermodel.*;
 import org.apache.poi.ss.usermodel.CellType;
 import java.util.*;
@@ -298,6 +299,8 @@ public class DocumentProcessor {
         // 批量翻译
         List<String> translated = translateService.batchTranslate(originals);
 
+        System.out.println("翻译完成，开始写回文档");
+
         // 写回翻译结果
         restoreWordTexts(doc, elements, translated);
 
@@ -368,30 +371,33 @@ public class DocumentProcessor {
         return elements;
     }
 
+
     /**
-     * 根据 TextElement 列表和翻译结果，恢复文档中的文本。
-     * 注意：这里假设翻译结果的顺序与原文一致。
+     * 恢复文档文本，包括普通段落 run 和表格 cell run，
+     * 替换时生成绝对不与 old/new 重叠的安全 token
      */
     private void restoreWordTexts(HWPFDocument doc,List<TextElement> elements,List<String> translatedTexts) {
         Range docRange = doc.getRange();
 
-        // 2.1 先缓存所有表格
+        // 1. 缓存所有表格
         List<Table> tables = new ArrayList<>();
         TableIterator tit = new TableIterator(docRange);
         while (tit.hasNext()) {
             tables.add(tit.next());
         }
 
-        // 2.2 倒序替换
+        // 2. 倒序替换，避免前面的替换影响后面的索引
         for (int idx = elements.size() - 1; idx >= 0; idx--) {
             TextElement el = elements.get(idx);
             String newRaw = translatedTexts.get(idx);
             if (newRaw == null) newRaw = "";
-            // cell.text() 不含 '\n'，我们这里也去掉
             newRaw = newRaw.replace("\n", "");
 
+            String oldFull = null;
+            CharacterRun run = null;
+            boolean hasCR = false;
+
             if ("run".equals(el.type)) {
-                // 普通段落 Run
                 Integer pI = (Integer) el.position.get("paragraphIndex");
                 Integer rI = (Integer) el.position.get("runIndex");
                 if (pI == null || rI == null) continue;
@@ -399,49 +405,76 @@ public class DocumentProcessor {
                 Paragraph para = docRange.getParagraph(pI);
                 if (rI < 0 || rI >= para.numCharacterRuns()) continue;
 
-                CharacterRun run = para.getCharacterRun(rI);
-                String oldFull = run.text();
+                run = para.getCharacterRun(rI);
+                oldFull = run.text();
                 if (oldFull == null) oldFull = "";
-                boolean hasCR = oldFull.endsWith("\r");
-
-                String token = "__T" + idx + "__";
-                String tokenFull = token + (hasCR ? "\r" : "");
-                String newFull   = newRaw + (hasCR ? "\r" : "");
-
-                run.replaceText(oldFull, tokenFull);
-                run.replaceText(tokenFull, newFull);
+                hasCR = oldFull.endsWith("\r");
 
             } else if ("tableCellRun".equals(el.type)) {
-                // 表格单元格内的 Run
                 Integer tI  = (Integer) el.position.get("tableIndex");
                 Integer rI  = (Integer) el.position.get("rowIndex");
                 Integer cI  = (Integer) el.position.get("cellIndex");
                 Integer cpI = (Integer) el.position.get("cellParaIndex");
                 Integer crI = (Integer) el.position.get("cellRunIndex");
-                if (tI==null||rI==null||cI==null||cpI==null||crI==null) continue;
-                if (tI<0||tI>=tables.size()) continue;
+                if (tI == null || rI == null || cI == null || cpI == null || crI == null) continue;
+                if (tI < 0 || tI >= tables.size()) continue;
 
-                TableCell cell = tables.get(tI)
-                                    .getRow(rI)
-                                    .getCell(cI);
-                // 找到单元格内对应段落和 run
+                TableCell cell = tables.get(tI).getRow(rI).getCell(cI);
                 Paragraph cellPara = cell.getParagraph(cpI);
                 if (crI < 0 || crI >= cellPara.numCharacterRuns()) continue;
-                CharacterRun run = cellPara.getCharacterRun(crI);
+                run = cellPara.getCharacterRun(crI);
 
-                String oldFull = run.text().replaceAll("\\p{Cntrl}", "");
-                boolean hasCR = oldFull.endsWith("\r");
+                oldFull = run.text();
+                if (oldFull == null) oldFull = "";
+                oldFull = oldFull.replaceAll("\\p{Cntrl}", ""); // 移除控制符
+                hasCR = oldFull.endsWith("\r");
+            }
 
-                String token = "__T" + idx + "__";
-                String tokenFull = token + (hasCR ? "\r" : "");
-                String newFull   = newRaw + (hasCR ? "\r" : "");
+            if (run != null && oldFull != null) {
+                // === 生成绝对安全的 token ===
+                String tokenCore = generateSafeToken(oldFull, newRaw);
+                String token     = tokenCore + (hasCR ? "\r" : "");
+                String newFull   = newRaw    + (hasCR ? "\r" : "");
 
-                run.replaceText(oldFull, tokenFull);
-                run.replaceText(tokenFull, newFull);
+                // 两步替换，避免 oldFull 与 newFull 部分重叠导致的死循环
+                run.replaceText(oldFull, token);
+                run.replaceText(token,   newFull);
             }
         }
     }
 
+    /**
+     * 生成一个在 oldFull 和 newCore 中都不含任一字符的唯一 token
+     * 若全体字符都冲突，使用 Unicode 私有区（理论上极小概率）
+     */
+    private String generateSafeToken(String oldFull, String newCore) {
+        Set<Character> forbidden = new HashSet<>();
+        if (oldFull != null) {
+            for (char c : oldFull.toCharArray()) forbidden.add(c);
+        }
+        if (newCore != null) {
+            for (char c : newCore.toCharArray()) forbidden.add(c);
+        }
+        // 字符池：大写、小写、数字
+        String base = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        List<Character> allowed = new ArrayList<>();
+        for (char c : base.toCharArray()) {
+            if (!forbidden.contains(c)) allowed.add(c);
+        }
+        // 若允许集为空，则取 Unicode 私有区
+        if (allowed.isEmpty()) {
+            int code = 0xE000 + new Random().nextInt(0x1000);
+            return new String(Character.toChars(code));
+        }
+        // 随机长度 8
+        Random rnd = new Random();
+        int length = 8;
+        StringBuilder sb = new StringBuilder(length);
+        for (int i = 0; i < length; i++) {
+            sb.append(allowed.get(rnd.nextInt(allowed.size())));
+        }
+        return sb.toString();
+    }
 
     // 5. Excel XLS处理
     public HSSFWorkbook processExcelXLS(HSSFWorkbook workbook) throws Exception {
