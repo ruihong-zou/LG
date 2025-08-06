@@ -1,6 +1,6 @@
 # LG Office Document Processor
 
-一个基于Spring Boot的Office文档处理工具，支持多种文档格式的处理和翻译。
+一个基于Spring Boot的Office文档处理工具，支持多种文档格式的处理和模拟翻译。
 
 ## 功能特性
 
@@ -51,7 +51,7 @@ mvn spring-boot:run
 1. **Apache POI处理**：轻量级解决方案，支持所有格式
 2. **Aspose处理**：版式保持度最高，适合复杂文档
 3. **docx4j处理**：专门处理.docx格式
-4. **智能翻译**：自动检测语言并进行中英文互译
+4. **模拟翻译**：自动检测语言并进行标记
 
 ## 开发指南
 
@@ -60,9 +60,11 @@ mvn spring-boot:run
 src/
 ├── main/
 │   ├── java/com/example/demo/
-│   │   ├── DocumentController.java    # 主控制器
-│   │   ├── TranslateService.java      # 翻译服务
-│   │   └── OfficeProcessorApplication.java
+│   │   ├── DocumentController.java          # 主控制器
+│   │   ├── TranslateService.java            # 翻译服务
+│   │   ├── OfficeProcessorApplication.java  # 
+│   │   ├── ErrorController.java             # 
+│   │   └── DocumentProcessor.java           # 文档解析
 │   └── resources/
 │       ├── static/index.html          # 前端页面
 │       └── application.properties     # 配置文件
