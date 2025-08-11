@@ -18,6 +18,7 @@ buildNumber.properties
 .settings/
 .project
 .classpath
+out/
 
 # OS
 .DS_Store
@@ -35,3 +36,8 @@ logs/
 # Application specific
 uploads/
 temp/
+
+# Environment variables
+.env
+.env.*
+!.env.example
