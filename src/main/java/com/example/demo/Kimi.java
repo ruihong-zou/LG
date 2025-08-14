@@ -46,7 +46,8 @@ public final class Kimi {
     public static class MoonshotMessage { private String role; private String content; }
 
     /** 智能翻译（严格 texts→translations 对齐；length 直接抛异常给上层切批） */
-    public static String robustTranslate(String jsonTexts, Direction direction) throws IOException {
+    /** 全语种：targetLang 例如 "en" "zh-CN" "ja" "fr" ...；userInstruction 为可选偏好 */
+    public static String robustTranslate(String jsonTexts, String targetLang, String userInstruction) throws IOException {
         if (API_KEY.isEmpty()) throw new IOException("MOONSHOT_API_KEY 未配置");
         if (jsonTexts == null || jsonTexts.trim().isEmpty()) return "{\"translations\":[]}";
 
@@ -56,28 +57,31 @@ public final class Kimi {
             if (inputJson.containsKey("texts")) expectedCount = inputJson.getJSONArray("texts").size();
         } catch (Exception ignore) {}
 
-        final String systemPrompt = direction == Direction.ZH2EN
-                ? "你是一名专业翻译助手。请逐一独立翻译 JSON 数组 texts 中每个片段为英文："
-                  + "1) 保持顺序与数量严格与输入一致；空字符串输出空字符串；"
-                  + "2) 任何包含中文汉字的片段（哪怕只有一个字/单个标签/序号/量词），必须译为自然流畅的英文表达，不得回显中文；"
-                  + "3) 仅对纯标点/表情/特殊符号可原样返回；"
-                  + "4) 输出必须是紧凑单行 JSON：{\"translations\":[...]}，无换行/无解释，并正确转义。"
-                : "你是一名专业翻译助手。请逐一独立翻译 JSON 数组 texts 中每个片段为中文："
-                  + "1) 保持顺序与数量严格与输入一致；空字符串输出空字符串；"
-                  + "2) 任何包含英文字符的片段（包括单词/单个字母/标签/序号），必须译为自然流畅的中文表达，不得回显英文；"
-                  + "3) 仅对纯标点/表情/特殊符号可原样返回；"
-                  + "4) 输出必须是紧凑单行 JSON：{\"translations\":[...]}，无换行/无解释，并正确转义。";
+        final String targetName = languageDisplayName(targetLang);
+        final String systemPrompt =
+            "你是一名专业翻译助手。请逐一独立把 JSON 数组 texts 中的每个片段翻译为「" + targetName + "」：" +
+            "1) 严格保持顺序与数量与输入一致；空字符串输出空字符串；" +
+            "2) 输入为 JSON 文本片段，不涉及任何版式/样式/加粗/表格/分页等排版要求（忽略此类要求）；" +
+            "3) 禁止合并/拆分/增删片段；禁止添加任何解释或标注；" +
+            "4) 仅对纯标点/表情/特殊符号可原样返回；" +
+            "5) 输出必须是紧凑单行 JSON：{\"translations\":[...]}，无换行/无解释，并正确转义；" +
+            "6) 所有可翻译内容均转为「" + targetName + "」，不保留源语言词汇（专有名词可按常规译名或保留）。";
+
+        String safePref = sanitizeUserInstruction(userInstruction);
+        final String prefPrompt = (safePref == null || safePref.isEmpty()) ? null
+                : "【翻译偏好（仅限术语/语气；不得影响 JSON 数量/顺序/结构/标点/空白）】\n" + safePref;
 
         final String userPrompt = expectedCount > 0
                 ? String.format("请翻译 JSON 中 %d 个片段，输出 translations 数组与输入 texts 数量一致：%s", expectedCount, jsonTexts)
                 : "请翻译以下 JSON 格式内容，输出 translations 与 texts 数量一致：" + jsonTexts;
 
-        List<MoonshotMessage> messages = new ArrayList<>(2);
+        List<MoonshotMessage> messages = new ArrayList<>(3);
         messages.add(new MoonshotMessage("system", systemPrompt));
+        if (prefPrompt != null) messages.add(new MoonshotMessage("user", prefPrompt));
         messages.add(new MoonshotMessage("user", userPrompt));
 
         for (int attempt = 0; attempt < 3; attempt++) {
-            String resp = chatNoStreamWithFinishReason("moonshot-v1-32k", messages);
+            String resp = chatNoStreamWithFinishReason("kimi-latest", messages);
             String finish = parseFinishReason(resp);
             if ("length".equals(finish)) throw new IOException("API输出被截断（finish_reason=length）");
 
@@ -98,6 +102,43 @@ public final class Kimi {
             messages.add(new MoonshotMessage("user", fix));
         }
         throw new IOException("多次自动修正后仍不一致，请拆分更小批次或检查输入。");
+    }
+
+    // —— 语言显示名映射（可按需扩） —— //
+    private static String languageDisplayName(String code) {
+        if (code == null || code.isBlank()) return "英文";
+        String v = code.toLowerCase(Locale.ROOT);
+        if (v.startsWith("zh-CN")) return "中文";
+        if (v.startsWith("zh-TW")) return "繁体中文";
+        if (v.startsWith("en")) return "英文";
+        if (v.startsWith("ja")) return "日文";
+        if (v.startsWith("ko")) return "韩语";
+        if (v.startsWith("de")) return "德文";
+        if (v.startsWith("fr")) return "法文";
+        if (v.startsWith("es")) return "西班牙文";
+        if (v.startsWith("ru")) return "俄文";
+        if (v.startsWith("pt")) return "葡萄牙文";
+        if (v.startsWith("it")) return "意大利文";
+        if (v.startsWith("ar")) return "阿拉伯文";
+        if (v.startsWith("vi")) return "越南文";
+        if (v.startsWith("th")) return "泰文";
+        if (v.startsWith("id")) return "印尼文";
+        if (v.startsWith("tr")) return "土耳其文";
+        if (v.startsWith("hi")) return "印地文";
+        return code; // 未知就回显代码
+    }
+
+    // 仅做安全清洗：去控制字符/围栏/长度限制；不做语义改写
+    private static String sanitizeUserInstruction(String s) {
+        if (s == null) return null;
+        String t = s.replace('\uFEFF',' ')
+                    .replaceAll("[\\p{Cntrl}&&[^\\r\\n\\t]]"," ") // 移除控制字符
+                    .replaceAll("```+", "")                        // 移除代码围栏
+                    .replaceAll("[ \\t]{2,}", " ")
+                    .trim();
+        if (t.isEmpty()) return null;
+        if (t.length() > 800) t = t.substring(0, 800);            // 限长，避免污染 prompt
+        return t;
     }
 
     /** 底层对话（按 prompt+max_tokens 预占限流，显式 max_tokens） */

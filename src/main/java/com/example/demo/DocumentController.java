@@ -27,40 +27,46 @@ public class DocumentController {
     }
     
     // Apache POI 处理方法
-    @PostMapping("/process")
-    public ResponseEntity<byte[]> processWithPOI(@RequestParam("file") MultipartFile file) throws Exception {
-        try {
-            System.out.println("开始处理文件: " + file.getOriginalFilename());
-            String filename = file.getOriginalFilename().toLowerCase();
-            
-            if (filename.endsWith(".xlsx")) {
-                return processExcelXLSX(file);
-            } else if (filename.endsWith(".xls")) {
-                return processExcelXLS(file);
-            } else if (filename.endsWith(".pptx")) {
-                return processPowerPointPPTX(file);
-            } else if (filename.endsWith(".ppt")) {
-                return processPowerPointPPT(file);
-            } else if (filename.endsWith(".docx")) {
-                return processWordDOCX(file);
-            } else if (filename.endsWith(".doc")) {
-                return processWordDOC(file);
-            } else {
-                throw new IllegalArgumentException("不支持的文件格式: " + filename);
-            }
-        } catch (Exception e) {
-            System.err.println("处理文件时出错: " + e.getMessage());
-            e.printStackTrace();
-            throw e;
+@PostMapping("/process")
+public ResponseEntity<byte[]> processWithPOI(
+        @RequestParam("file") MultipartFile file,
+        @RequestParam(value = "sourceLang", required = false, defaultValue = "auto") String sourceLang,
+        @RequestParam(value = "targetLang", required = false, defaultValue = "en") String targetLang,
+        @RequestParam(value = "userPrompt", required = false) String userPrompt
+) throws Exception {
+    try {
+        System.out.println("开始处理文件: " + file.getOriginalFilename());
+        String filename = file.getOriginalFilename().toLowerCase();
+
+        if (filename.endsWith(".xlsx")) {
+            return processExcelXLSX(file, targetLang, userPrompt);
+        } else if (filename.endsWith(".xls")) {
+            return processExcelXLS(file, targetLang, userPrompt);
+        } else if (filename.endsWith(".pptx")) {
+            return processPowerPointPPTX(file, targetLang, userPrompt);
+        } else if (filename.endsWith(".ppt")) {
+            return processPowerPointPPT(file, targetLang, userPrompt);
+        } else if (filename.endsWith(".docx")) {
+            return processWordDOCX(file, targetLang, userPrompt);
+        } else if (filename.endsWith(".doc")) {
+            return processWordDOC(file, targetLang, userPrompt);
+        } else {
+            throw new IllegalArgumentException("不支持的文件格式: " + filename);
         }
+
+    } catch (Exception e) {
+        System.err.println("处理文件时出错: " + e.getMessage());
+        e.printStackTrace();
+        throw e;
     }
+}
     
-    private ResponseEntity<byte[]> processExcelXLSX(MultipartFile file) throws Exception {
+    private ResponseEntity<byte[]> processExcelXLSX(MultipartFile file, String targetLang, String userPrompt) throws Exception {
         System.out.println("处理Excel XLSX文件 - 使用批量翻译");
         XSSFWorkbook workbook = new XSSFWorkbook(file.getInputStream());
         
         // 使用新的批量处理逻辑
-        workbook = documentProcessor.processExcelDocument(workbook);
+        workbook = documentProcessor.processExcelDocument(workbook, targetLang, userPrompt);
         
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         workbook.write(out);
@@ -71,13 +77,13 @@ public class DocumentController {
                 .body(out.toByteArray());
     }
     
-    private ResponseEntity<byte[]> processExcelXLS(MultipartFile file) throws Exception {
+    private ResponseEntity<byte[]> processExcelXLS(MultipartFile file, String targetLang, String userPrompt) throws Exception {
         System.out.println("处理Excel XLS文件 - 使用批量翻译");
         
         try {
             // 尝试作为传统XLS格式处理
             HSSFWorkbook workbook = new HSSFWorkbook(file.getInputStream());
-            workbook = documentProcessor.processExcelXLS(workbook);
+            workbook = documentProcessor.processExcelXLS(workbook, targetLang, userPrompt);
             
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             workbook.write(out);
@@ -90,16 +96,16 @@ public class DocumentController {
         } catch (org.apache.poi.poifs.filesystem.OfficeXmlFileException e) {
             // 如果是XML格式，说明实际是XLSX文件，使用XLSX处理逻辑
             System.out.println("检测到文件实际为XLSX格式，切换到XLSX处理逻辑");
-            return processExcelXLSX(file);
+            return processExcelXLSX(file, targetLang, userPrompt);
         }
     }
     
-    private ResponseEntity<byte[]> processWordDOCX(MultipartFile file) throws Exception {
+    private ResponseEntity<byte[]> processWordDOCX(MultipartFile file, String targetLang, String userPrompt) throws Exception {
         System.out.println("处理Word DOCX文件 - 使用批量翻译");
         XWPFDocument doc = new XWPFDocument(file.getInputStream());
         
         // 使用新的批量处理逻辑
-        doc = documentProcessor.processWordDocument(doc);
+        doc = documentProcessor.processWordDocument(doc, targetLang, userPrompt);
         
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         doc.write(out);
@@ -110,14 +116,14 @@ public class DocumentController {
                 .body(out.toByteArray());
     }
     
-    private ResponseEntity<byte[]> processWordDOC(MultipartFile file) throws Exception {
+    private ResponseEntity<byte[]> processWordDOC(MultipartFile file, String targetLang, String userPrompt) throws Exception {
         System.out.println("处理Word DOC文件 - 使用批量翻译");
         
         try {
             // 尝试作为传统DOC格式处理
             HWPFDocument doc = new HWPFDocument(file.getInputStream());
             
-            doc = documentProcessor.processWordDOC(doc);
+            doc = documentProcessor.processWordDOC(doc, targetLang, userPrompt);
             
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             doc.write(out);
@@ -131,19 +137,19 @@ public class DocumentController {
             // 如果是OOXML格式，说明实际是DOCX文件，使用DOCX处理逻辑
             if (e.getMessage().contains("OOXML")) {
                 System.out.println("检测到文件实际为DOCX格式，切换到DOCX处理逻辑");
-                return processWordDOCX(file);
+                return processWordDOCX(file, targetLang, userPrompt);
             } else {
                 throw e;
             }
         }
     }
     
-    private ResponseEntity<byte[]> processPowerPointPPTX(MultipartFile file) throws Exception {
+    private ResponseEntity<byte[]> processPowerPointPPTX(MultipartFile file, String targetLang, String userPrompt) throws Exception {
         System.out.println("处理PowerPoint PPTX文件 - 使用批量翻译");
         XMLSlideShow ppt = new XMLSlideShow(file.getInputStream());
         
         // 使用新的批量处理逻辑
-        ppt = documentProcessor.processPowerPointPPTX(ppt);
+        ppt = documentProcessor.processPowerPointPPTX(ppt, targetLang, userPrompt);
         
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ppt.write(out);
@@ -154,14 +160,14 @@ public class DocumentController {
                 .body(out.toByteArray());
     }
     
-    private ResponseEntity<byte[]> processPowerPointPPT(MultipartFile file) throws Exception {
+    private ResponseEntity<byte[]> processPowerPointPPT(MultipartFile file, String targetLang, String userPrompt) throws Exception {
         System.out.println("处理PowerPoint PPT文件 - 使用批量翻译");
         
         try {
             HSLFSlideShow ppt = new HSLFSlideShow(file.getInputStream());
             
             // 使用新的批量处理逻辑
-            ppt = documentProcessor.processPowerPointPPT(ppt);
+            ppt = documentProcessor.processPowerPointPPT(ppt, targetLang, userPrompt);
             
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             ppt.write(out);
@@ -174,7 +180,7 @@ public class DocumentController {
         } catch (org.apache.poi.poifs.filesystem.OfficeXmlFileException e) {
             // 如果是XML格式，说明实际是PPTX文件，使用PPTX处理逻辑
             System.out.println("检测到文件实际为PPTX格式，切换到PPTX处理逻辑");
-            return processPowerPointPPTX(file);
+            return processPowerPointPPTX(file, targetLang, userPrompt);
         }
     }
     

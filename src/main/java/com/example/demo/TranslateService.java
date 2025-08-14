@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
+import java.util.Locale;
 
 @Slf4j
 @Service
@@ -37,18 +38,23 @@ public class TranslateService {
     private static int getEnvInt(String k, int d){ try { return Integer.parseInt(System.getenv().getOrDefault(k, String.valueOf(d))); } catch(Exception e){ return d; } }
     private static Kimi.Direction parseDir(String v){ return "EN2ZH".equalsIgnoreCase(v) ? Kimi.Direction.EN2ZH : Kimi.Direction.ZH2EN; }
 
-    // —— 输出估算：修正为“按输入 token 的倍数”，不再用 prompt 比例（避免过度切分） ——
-    private static double outputFactor(Kimi.Direction d){ return d == Kimi.Direction.ZH2EN ? 1.20 : 0.90; }
+    /** 粗略输出系数：CJK 语言更紧凑，其它语种略膨胀（仅用于切片预算） */
+    private static double outputFactorFor(String targetLang) {
+        if (targetLang == null) return 1.15;
+        String v = targetLang.toLowerCase(Locale.ROOT);
+        boolean cjk = v.startsWith("zh") || v.startsWith("ja") || v.startsWith("ko");
+        return cjk ? 0.95 : 1.20;
+    }
 
     /** 默认方向（ENV: TRANSLATE_DIRECTION），批量翻译 */
-    public List<String> batchTranslate(List<String> texts) { return batchTranslate(texts, DEFAULT_DIR); }
+    // public List<String> batchTranslate(List<String> texts) { return batchTranslate(texts, DEFAULT_DIR); }
 
     /** 指定方向的批量翻译（并发跑批 & 保序） */
-    public List<String> batchTranslate(List<String> texts, Kimi.Direction direction) {
+    public List<String> batchTranslate(List<String> texts, String targetLang, String userInstruction) {
         if (texts == null || texts.isEmpty()) return new ArrayList<>();
 
         long t0 = System.currentTimeMillis();
-        log.info("translate: size={}, dir={}, parallelism={}", texts.size(), direction, Math.max(1, PARALLELISM));
+        log.info("translate: size={}, targetLang={}, parallelism={}", texts.size(), targetLang, Math.max(1, PARALLELISM));
 
         // 清理 + 默认 CJK 空格归一化
         final int N = texts.size();
@@ -56,15 +62,14 @@ public class TranslateService {
         for (String s : texts) cleaned.add(cleanForJson(s));
 
         // 规划批次（返回一组连续区间）
-        List<Range> plan = planBatches(cleaned, direction);
+        List<Range> plan = planBatches(cleaned, targetLang);
         log.info("planned batches: {}, avg size≈{}", plan.size(), N / Math.max(1, plan.size()));
 
         // 并发执行所有批次，并把结果写回固定数组，保证全局顺序
         String[] out = new String[N];
         if (plan.size() == 1) {
-            // 小优化：单批串行即可
             Range r = plan.get(0);
-            List<String> partRes = translateOneBatchWithAutoSplit(cleaned.subList(r.start, r.end), direction);
+            List<String> partRes = translateOneBatchWithAutoSplit(cleaned.subList(r.start, r.end), targetLang, userInstruction);
             for (int i=0;i<partRes.size();i++) out[r.start+i] = partRes.get(i);
         } else {
             int poolSize = Math.min(PARALLELISM, plan.size());
@@ -72,32 +77,27 @@ public class TranslateService {
             List<Callable<Void>> jobs = new ArrayList<>(plan.size());
             for (Range r : plan) {
                 jobs.add(() -> {
-                    List<String> partRes = translateOneBatchWithAutoSplit(cleaned.subList(r.start, r.end), direction);
+                    List<String> partRes = translateOneBatchWithAutoSplit(cleaned.subList(r.start, r.end), targetLang, userInstruction);
                     for (int i = 0; i < partRes.size(); i++) out[r.start + i] = partRes.get(i);
                     return null;
                 });
             }
             try {
-                List<Future<Void>> fs = exec.invokeAll(jobs);
-                for (Future<Void> f : fs) f.get(); // 触发异常传播
+                for (Future<Void> f : exec.invokeAll(jobs)) f.get();
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 log.warn("parallel interrupted, falling back to sequential...");
-                // 兜底串行
                 for (Range r : plan) {
-                    List<String> partRes = translateOneBatchWithAutoSplit(cleaned.subList(r.start, r.end), direction);
+                    List<String> partRes = translateOneBatchWithAutoSplit(cleaned.subList(r.start, r.end), targetLang, userInstruction);
                     for (int i=0;i<partRes.size();i++) out[r.start+i] = partRes.get(i);
                 }
             } catch (ExecutionException ee) {
                 log.warn("parallel execution error: {}", ee.getMessage());
-                // 兜底串行
                 for (Range r : plan) {
-                    List<String> partRes = translateOneBatchWithAutoSplit(cleaned.subList(r.start, r.end), direction);
+                    List<String> partRes = translateOneBatchWithAutoSplit(cleaned.subList(r.start, r.end), targetLang, userInstruction);
                     for (int i=0;i<partRes.size();i++) out[r.start+i] = partRes.get(i);
                 }
-            } finally {
-                exec.shutdownNow();
-            }
+            } finally { exec.shutdownNow(); }
         }
 
         List<String> results = new ArrayList<>(N);
@@ -107,7 +107,7 @@ public class TranslateService {
     }
 
     // —— 单批执行（length / 数量不一致 → 自动细分重试） ——
-    private List<String> translateOneBatchWithAutoSplit(List<String> part, Kimi.Direction direction) {
+    private List<String> translateOneBatchWithAutoSplit(List<String> part, String targetLang, String userInstruction) {
         final int n = part.size();
         String[] out = new String[n];
         List<Integer> idx = new ArrayList<>();
@@ -140,7 +140,7 @@ public class TranslateService {
         }
 
         try {
-            String resp = Kimi.robustTranslate(json, direction);
+            String resp = Kimi.robustTranslate(json, targetLang, userInstruction); // ← 仅 targetLang
             com.alibaba.fastjson.JSONObject obj = com.alibaba.fastjson.JSONObject.parseObject(resp);
             com.alibaba.fastjson.JSONArray arr = obj.getJSONArray("translations");
             if (arr == null || arr.size() != pay.size()) throw new RuntimeException("size mismatch");
@@ -152,27 +152,15 @@ public class TranslateService {
                 boolean same = safeEqualsTrim(in, outStr);
                 if (same) sameCount++;
                 out[idx.get(k)] = outStr;
-
-                if (LOG_SEGMENT_DECISIONS) {
-                    log.debug("seg[{}] MODEL-OUT: in=\"{}\" | out=\"{}\"{}",
-                            idx.get(k), preview(in), preview(outStr),
-                            same ? "  (UNCHANGED)" : "");
-                }
+                if (LOG_SEGMENT_DECISIONS) log.debug("seg[{}] MODEL-OUT: in=\"{}\" | out=\"{}\"{}", idx.get(k), preview(in), preview(outStr), same ? "  (UNCHANGED)" : "");
             }
-            if (LOG_SEGMENT_DECISIONS && sameCount > 0) {
-                log.info("model returned unchanged items in this batch: {}", sameCount);
-            }
+            if (LOG_SEGMENT_DECISIONS && sameCount > 0) log.info("model returned unchanged items in this batch: {}", sameCount);
             return java.util.Arrays.asList(out);
 
         } catch (Exception e) {
             String msg = String.valueOf(e.getMessage());
             boolean needSplit =
-                msg != null && (
-                    msg.contains("finish_reason=length") ||
-                    msg.contains("仍不一致") ||
-                    msg.contains("not equal") ||
-                    msg.contains("size mismatch")
-                );
+                    msg != null && (msg.contains("finish_reason=length") || msg.contains("仍不一致") || msg.contains("not equal") || msg.contains("size mismatch"));
 
             if (needSplit) {
                 log.warn("need split & retry, reason={}", msg);
@@ -181,8 +169,8 @@ public class TranslateService {
                     return simulateBatch(part);
                 }
                 int mid = part.size() / 2;
-                List<String> left  = translateOneBatchWithAutoSplit(part.subList(0, mid), direction);
-                List<String> right = translateOneBatchWithAutoSplit(part.subList(mid, part.size()), direction);
+                List<String> left  = translateOneBatchWithAutoSplit(part.subList(0, mid), targetLang, userInstruction);
+                List<String> right = translateOneBatchWithAutoSplit(part.subList(mid, part.size()), targetLang, userInstruction);
                 List<String> merged = new ArrayList<>(left.size() + right.size());
                 merged.addAll(left); merged.addAll(right);
                 return merged;
@@ -196,14 +184,14 @@ public class TranslateService {
     // ===== 批次规划：用“输入token总和”估算输出，再对照 max_tokens 分批 =====
     private static final class Range { final int start, end; Range(int s,int e){ this.start=s; this.end=e; } }
 
-    private List<Range> planBatches(List<String> cleaned, Kimi.Direction direction) {
+    private List<Range> planBatches(List<String> cleaned, String targetLang) {
         List<Range> plan = new ArrayList<>();
         int curStart = 0;
         int curCount = 0;
 
         int promptTokens = EST_PROMPT_OVERHEAD;     // 当前批的 prompt token 总估
         int outputTokens = 0;                       // 当前批的“预计输出”总估（= sum(input_tokens * factor)）
-        double of = outputFactor(direction);
+        double of = outputFactorFor(targetLang);
 
         for (int i = 0; i < cleaned.size(); i++) {
             String s = cleaned.get(i);

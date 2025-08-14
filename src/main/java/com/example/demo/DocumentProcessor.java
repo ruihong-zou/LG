@@ -34,7 +34,7 @@ public class DocumentProcessor {
     }
     
     // 1. Word DOCX文档处理
-    public XWPFDocument processWordDocument(XWPFDocument doc) throws Exception {
+    public XWPFDocument processWordDocument(XWPFDocument doc, String targetLang, String userPrompt) throws Exception {
         System.out.println("开始批量处理Word文档");
         
         List<TextElement> elements = extractWordTexts(doc);
@@ -44,7 +44,7 @@ public class DocumentProcessor {
         for (TextElement element : elements) {
             texts.add(element.text);
         }
-        List<String> translatedTexts = translateService.batchTranslate(texts);
+        List<String> translatedTexts = translateService.batchTranslate(texts, targetLang, userPrompt);
         
         restoreWordTexts(doc, elements, translatedTexts);
         
@@ -121,7 +121,7 @@ public class DocumentProcessor {
     }
     
     // 2. Excel XLSX文档处理
-    public XSSFWorkbook processExcelDocument(XSSFWorkbook workbook) throws Exception {
+    public XSSFWorkbook processExcelDocument(XSSFWorkbook workbook, String targetLang, String userPrompt) throws Exception {
         System.out.println("开始批量处理Excel文档");
         
         List<TextElement> elements = extractExcelTexts(workbook);
@@ -131,7 +131,7 @@ public class DocumentProcessor {
         for (TextElement element : elements) {
             texts.add(element.text);
         }
-        List<String> translatedTexts = translateService.batchTranslate(texts);
+        List<String> translatedTexts = translateService.batchTranslate(texts, targetLang, userPrompt);
         
         restoreExcelTexts(workbook, elements, translatedTexts);
         return workbook;
@@ -177,7 +177,7 @@ public class DocumentProcessor {
     }
     
     // 3. PowerPoint PPTX处理
-    public XMLSlideShow processPowerPointPPTX(XMLSlideShow ppt) throws Exception {
+    public XMLSlideShow processPowerPointPPTX(XMLSlideShow ppt, String targetLang, String userPrompt) throws Exception {
         System.out.println("开始批量处理PowerPoint PPTX文档");
         
         List<TextElement> elements = extractPPTXTexts(ppt);
@@ -187,7 +187,7 @@ public class DocumentProcessor {
         for (TextElement element : elements) {
             texts.add(element.text);
         }
-        List<String> translatedTexts = translateService.batchTranslate(texts);
+        List<String> translatedTexts = translateService.batchTranslate(texts, targetLang, userPrompt);
         
         restorePPTXTexts(ppt, elements, translatedTexts);
         return ppt;
@@ -282,7 +282,7 @@ public class DocumentProcessor {
     }
     
     // 4. Word DOC处理
-    public HWPFDocument processWordDOC(HWPFDocument doc) throws Exception {
+    public HWPFDocument processWordDOC(HWPFDocument doc, String targetLang, String userPrompt) throws Exception {
         System.out.println("开始批量处理 .doc 文档");
 
         List<TextElement> elements = extractWordTexts(doc);
@@ -294,7 +294,7 @@ public class DocumentProcessor {
             originals.add(el.text);
         }
         // 批量翻译
-        List<String> translated = translateService.batchTranslate(originals);
+        List<String> translated = translateService.batchTranslate(originals, targetLang, userPrompt);
 
         System.out.println("翻译完成，开始写回文档");
 
@@ -473,7 +473,7 @@ public class DocumentProcessor {
     }
 
     // 5. Excel XLS处理
-    public HSSFWorkbook processExcelXLS(HSSFWorkbook workbook) throws Exception {
+    public HSSFWorkbook processExcelXLS(HSSFWorkbook workbook, String targetLang, String userPrompt) throws Exception {
         System.out.println("开始批量处理Excel XLS文档");
         
         List<TextElement> elements = extractXLSTexts(workbook);
@@ -485,7 +485,7 @@ public class DocumentProcessor {
         }
         
         if (!texts.isEmpty()) {
-            List<String> translatedTexts = translateService.batchTranslate(texts);
+            List<String> translatedTexts = translateService.batchTranslate(texts, targetLang, userPrompt);
             restoreXLSTexts(workbook, elements, translatedTexts);
         }
         
@@ -532,7 +532,7 @@ public class DocumentProcessor {
     }
     
     // 6. PowerPoint PPT处理
-    public HSLFSlideShow processPowerPointPPT(HSLFSlideShow ppt) throws Exception {
+    public HSLFSlideShow processPowerPointPPT(HSLFSlideShow ppt, String targetLang, String userPrompt) throws Exception {
         System.out.println("开始批量处理PowerPoint PPT文档");
         
         List<TextElement> elements = extractPPTTexts(ppt);
@@ -542,7 +542,7 @@ public class DocumentProcessor {
         for (TextElement element : elements) {
             texts.add(element.text);
         }
-        List<String> translatedTexts = translateService.batchTranslate(texts);
+        List<String> translatedTexts = translateService.batchTranslate(texts, targetLang, userPrompt);
         
         restorePPTTexts(ppt, elements, translatedTexts);
         return ppt;
