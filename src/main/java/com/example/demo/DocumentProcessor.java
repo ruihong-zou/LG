@@ -2,20 +2,17 @@ package com.example.demo;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+
 import org.apache.poi.xwpf.usermodel.*;
-import org.checkerframework.checker.units.qual.s;
 import org.apache.poi.xssf.usermodel.*;
 import org.apache.poi.ss.usermodel.CellType;
-import java.util.*;
 import org.apache.poi.hssf.usermodel.*;
-import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.usermodel.*;
+import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.xslf.usermodel.*;
 import org.apache.poi.hslf.usermodel.*;
-import org.apache.poi.hwpf.extractor.WordExtractor;
-import org.apache.poi.hssf.extractor.ExcelExtractor;
-import java.io.ByteArrayOutputStream;
-import java.io.ByteArrayInputStream;
+
+import java.util.*;
 
 @Component
 public class DocumentProcessor {
@@ -370,7 +367,6 @@ public class DocumentProcessor {
 
         return elements;
     }
-
 
     /**
      * 恢复文档文本，包括普通段落 run 和表格 cell run，

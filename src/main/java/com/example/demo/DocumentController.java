@@ -1,45 +1,18 @@
 package com.example.demo;
 
-import com.aspose.words.*;
-import org.apache.poi.xwpf.usermodel.XWPFDocument;
-import org.apache.poi.xwpf.usermodel.XWPFParagraph;
-import org.apache.poi.xwpf.usermodel.XWPFRun;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
-import org.apache.poi.xssf.usermodel.XSSFSheet;
-import org.apache.poi.xssf.usermodel.XSSFRow;
-import org.apache.poi.xssf.usermodel.XSSFCell;
-import org.apache.poi.ss.usermodel.CellType;
-import org.docx4j.openpackaging.packages.WordprocessingMLPackage;
-import org.docx4j.openpackaging.parts.WordprocessingML.MainDocumentPart;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
-import org.apache.poi.xslf.usermodel.XSLFSlide;
-import org.apache.poi.xslf.usermodel.XSLFShape;
-import org.apache.poi.xslf.usermodel.XSLFTextShape;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
-import org.apache.poi.hssf.usermodel.HSSFSheet;
-import org.apache.poi.hssf.usermodel.HSSFRow;
-import org.apache.poi.hssf.usermodel.HSSFCell;
-import org.apache.poi.hwpf.HWPFDocument;
-import org.apache.poi.hwpf.usermodel.Range;
 import org.apache.poi.hslf.usermodel.HSLFSlideShow;
-import org.apache.poi.hslf.usermodel.HSLFSlide;
-import org.apache.poi.hslf.usermodel.HSLFShape;
-import org.apache.poi.hslf.usermodel.HSLFTextShape;
-import org.apache.poi.hslf.usermodel.HSLFTextParagraph;
-import org.apache.poi.sl.extractor.SlideShowExtractor;
-import org.apache.poi.sl.usermodel.SlideShow;
-import org.apache.poi.sl.usermodel.SlideShowFactory;
-import org.apache.poi.hwpf.extractor.WordExtractor;
-import org.apache.poi.hssf.extractor.ExcelExtractor;
+import org.apache.poi.hwpf.HWPFDocument;
 
 import java.io.ByteArrayOutputStream;
-import java.util.HashMap;
-import java.util.List;
-import java.util.ArrayList;
 
 @RestController
 @RequestMapping("/api")
@@ -48,45 +21,13 @@ public class DocumentController {
     @Autowired
     private DocumentProcessor documentProcessor;
     
-    @Autowired
-    private TranslateService translateService;
-    
     @GetMapping("/")
     public String home() {
         return "Office Document Processor is running! 📄✨";
     }
     
-    // Aspose 处理方法
-    @PostMapping("/aspose/process")
-    public ResponseEntity<byte[]> processWithAspose(@RequestParam("file") MultipartFile file) throws Exception {
-        String filename = file.getOriginalFilename();
-        
-        if (filename.endsWith(".xlsx") || filename.endsWith(".xls")) {
-            // 使用POI处理Excel文件
-            XSSFWorkbook workbook = new XSSFWorkbook(file.getInputStream());
-            
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            workbook.write(out);
-            workbook.close();
-            
-            return ResponseEntity.ok()
-                    .header("Content-Disposition", "attachment; filename=aspose-processed.xlsx")
-                    .body(out.toByteArray());
-        } else {
-            // 处理Word文件
-            Document doc = new Document(file.getInputStream());
-            
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            doc.save(out, SaveFormat.DOCX);
-            
-            return ResponseEntity.ok()
-                    .header("Content-Disposition", "attachment; filename=aspose-processed.docx")
-                    .body(out.toByteArray());
-        }
-    }
-    
     // Apache POI 处理方法
-    @PostMapping("/poi/process")
+    @PostMapping("/process")
     public ResponseEntity<byte[]> processWithPOI(@RequestParam("file") MultipartFile file) throws Exception {
         try {
             System.out.println("开始处理文件: " + file.getOriginalFilename());
@@ -237,21 +178,4 @@ public class DocumentController {
         }
     }
     
-    // docx4j 处理方法
-    @PostMapping("/docx4j/process")
-    public ResponseEntity<byte[]> processWithDocx4j(@RequestParam("file") MultipartFile file) throws Exception {
-        WordprocessingMLPackage wordPackage = WordprocessingMLPackage.load(file.getInputStream());
-        
-        // 获取主文档部分
-        MainDocumentPart mainPart = wordPackage.getMainDocumentPart();
-        
-
-        
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        wordPackage.save(out);
-        
-        return ResponseEntity.ok()
-                .header("Content-Disposition", "attachment; filename=docx4j-processed.docx")
-                .body(out.toByteArray());
-    }
 }
