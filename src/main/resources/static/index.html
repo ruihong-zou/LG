@@ -22,6 +22,17 @@
 
     .hidden { display: none; }
     .inline { display: inline-flex; align-items: center; gap: 8px; }
+
+    /* 等待提示框 */
+    .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+      display: flex; align-items: center; justify-content: center; z-index: 9999; backdrop-filter: blur(1px); }
+    .overlay.hidden { display: none; }
+    .modal { width: min(90vw, 420px); background: #fff; border-radius: 12px; padding: 24px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2); text-align: center; }
+    .spinner { width: 48px; height: 48px; border-radius: 50%; border: 4px solid #e3e3e3; border-top-color: #007bff;
+      margin: 0 auto 12px; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .dim { color: #666; font-size: 14px; }
   </style>
 </head>
 <body>
@@ -32,8 +43,8 @@
       <h2>📝 文档翻译</h2>
       <p>支持 .doc, .docx, .xls, .xlsx, .ppt, .pptx — 轻量级解决方案</p>
 
+      <!-- 去掉 target（不再用 iframe） -->
       <form id="form" action="/api/process" method="post" enctype="multipart/form-data">
-        <!-- 语言选择 -->
         <div class="row">
           <div>
             <label for="sourceLang">原文语言</label>
@@ -78,34 +89,37 @@
               <option value="th">ไทย（泰文）</option>
               <option value="id">Bahasa Indonesia（印尼文）</option>
               <option value="tr">Türkçe（土耳其文）</option>
-              <option value="hi">हिन्दी（印地文）</option>
+              <option value="hi">হिन्दी（印地文）</option>
             </select>
           </div>
         </div>
 
-        <!-- 是否使用自定义提示词 -->
         <label class="inline" for="usePrompt">
           <input type="checkbox" id="usePrompt" />
           使用自定义提示词
         </label>
 
-        <!-- 自定义提示词容器：默认隐藏，勾选后显示 -->
         <div id="promptWrap" class="hidden">
           <label for="userPrompt">自定义提示词</label>
-          <textarea
-            id="userPrompt"
-            name="userPrompt"
+          <textarea id="userPrompt" name="userPrompt"
             placeholder="例：这篇文章与法务条款相关，翻译时请尽量使用专业法律术语；输出排版与原文保持一致。"
-            disabled
-          ></textarea>
+            disabled></textarea>
         </div>
 
-        <!-- 文件 -->
         <label for="file">选择文件</label>
         <input id="file" type="file" name="file" accept=".doc,.docx,.xls,.xlsx,.ppt,.pptx" required>
 
-        <button type="submit">使用 POI 处理</button>
+        <button id="submitBtn" type="submit">使用 POI 处理</button>
       </form>
+    </div>
+  </div>
+
+  <!-- 等待提示框 -->
+  <div id="overlay" class="overlay hidden" role="alertdialog" aria-live="assertive" aria-busy="true" aria-modal="true">
+    <div class="modal">
+      <div class="spinner" aria-hidden="true"></div>
+      <div id="progressTitle" style="font-weight:700; margin-bottom: 6px;">正在翻译与处理文件…</div>
+      <div id="progressTip" class="dim">根据文件大小，这需要一会儿。处理中<span id="dots">...</span></div>
     </div>
   </div>
 
@@ -118,34 +132,92 @@
     srcSel.addEventListener('change', () => localStorage.setItem('sourceLang', srcSel.value));
     tgtSel.addEventListener('change', () => localStorage.setItem('targetLang', tgtSel.value));
 
-    // 自定义提示词开关逻辑
+    // 自定义提示词开关
     const usePrompt = document.getElementById('usePrompt');
     const promptWrap = document.getElementById('promptWrap');
     const userPrompt = document.getElementById('userPrompt');
-
     function syncPromptUI() {
       const on = usePrompt.checked;
       promptWrap.classList.toggle('hidden', !on);
       userPrompt.disabled = !on;
-      if (!on) userPrompt.value = ''; // 关闭时清空，避免误提交历史内容
+      if (!on) userPrompt.value = '';
       localStorage.setItem('usePrompt', String(on));
     }
-
-    // 记住上次是否使用提示词
     usePrompt.checked = localStorage.getItem('usePrompt') === 'true';
     syncPromptUI();
     usePrompt.addEventListener('change', syncPromptUI);
 
-    // “非空”校验
-    document.getElementById('form').addEventListener('submit', (e) => {
-      if (usePrompt.checked) {
-        const text = userPrompt.value.trim();
-        if (text.length === 0) {
-          e.preventDefault();
-          alert('已勾选“使用自定义提示词”，但内容为空，请填写或取消勾选。');
+    // 等待提示框
+    const form = document.getElementById('form');
+    const submitBtn = document.getElementById('submitBtn');
+    const overlay = document.getElementById('overlay');
+    const dots = document.getElementById('dots');
+
+    let dotsTimer;
+    function showOverlay() {
+      overlay.classList.remove('hidden');
+      if (submitBtn) submitBtn.disabled = true;
+      let i = 0;
+      dots.textContent = '';
+      dotsTimer = setInterval(() => { i = (i + 1) % 4; dots.textContent = '.'.repeat(i); }, 350);
+    }
+    function hideOverlay() {
+      overlay.classList.add('hidden');
+      if (submitBtn) submitBtn.disabled = false;
+      clearInterval(dotsTimer);
+    }
+
+    // 统一的提交处理：fetch + Blob 下载
+    form.addEventListener('submit', async (e) => {
+      // 原生校验
+      if (!form.checkValidity()) return;
+      // 自定义提示词为空的二次校验
+      if (usePrompt.checked && userPrompt.value.trim().length === 0) {
+        e.preventDefault();
+        alert('已勾选“使用自定义提示词”，但内容为空，请填写或取消勾选。');
+        return;
+      }
+
+      e.preventDefault(); // 拦截默认表单提交
+      showOverlay();
+
+      try {
+        const fd = new FormData(form);
+        const resp = await fetch(form.action, { method: 'POST', body: fd });
+
+        // 失败响应（尽量给出可读信息）
+        if (!resp.ok) {
+          const ct = resp.headers.get('content-type') || '';
+          const msg = ct.includes('application/json') ? JSON.stringify(await resp.json()) : await resp.text();
+          throw new Error(`HTTP ${resp.status} ${resp.statusText} - ${msg?.slice?.(0, 200) || ''}`);
         }
+
+        // 解析文件名
+        const disposition = resp.headers.get('content-disposition') || '';
+        let filename = 'translated';
+        const m1 = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+        const m2 = /filename="?([^";]+)"?/i.exec(disposition);
+        if (m1) filename = decodeURIComponent(m1[1]);
+        else if (m2) filename = m2[1];
+
+        // 下载
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename || 'download';
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        console.error(err);
+        alert('下载失败：' + (err?.message || err));
+      } finally {
+        hideOverlay();
       }
     });
+
+    // 兜底：任何未捕获错误也关闭遮罩，避免“卡住”
+    window.addEventListener('error', () => hideOverlay(), true);
+    window.addEventListener('unhandledrejection', () => hideOverlay());
   </script>
 </body>
 </html>
