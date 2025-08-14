@@ -1,29 +1,151 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Office Document Processor</title>
-    <meta charset="UTF-8">
-    <style>
-        body { font-family: Arial, sans-serif; margin: 40px; }
-        .method { margin: 20px 0; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
-        input[type="file"] { margin: 10px 0; }
-        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 3px; cursor: pointer; }
-        button:hover { background: #0056b3; }
-    </style>
+  <title>Office Document Processor</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
+    .page { width: clamp(320px, 90vw, 880px); margin-inline: auto; }
+
+    .method { margin: 20px 0; padding: 20px; border: 1px solid #ddd; border-radius: 8px; }
+    label { font-weight: 600; display: block; margin: 8px 0 4px; }
+    input[type="file"] { margin: 10px 0; }
+    select, textarea { width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; }
+    textarea { resize: vertical; min-height: 96px; }
+    button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 6px; cursor: pointer; }
+    button:hover { background: #0056b3; }
+    small.hint { color: #666; display: block; margin-top: 4px; }
+
+    .row { display: grid; gap: 12px; grid-template-columns: 1fr; }
+    @media (min-width: 720px) { .row { grid-template-columns: 1fr 1fr; } }
+
+    .hidden { display: none; }
+    .inline { display: inline-flex; align-items: center; gap: 8px; }
+  </style>
 </head>
 <body>
+  <div class="page">
     <h1>📄 Office Document Processor</h1>
-    
+
     <div class="method">
-        <h2>📝 文档翻译</h2>
-        <p>支持 .doc, .docx, .xls, .xlsx, .ppt, .pptx，轻量级解决方案</p>
-        <form action="/api/process" method="post" enctype="multipart/form-data">
-            <input type="file" name="file" accept=".doc,.docx,.xls,.xlsx,.ppt,.pptx" required>
-            <button type="submit">使用 POI 处理</button>
-        </form>
+      <h2>📝 文档翻译</h2>
+      <p>支持 .doc, .docx, .xls, .xlsx, .ppt, .pptx — 轻量级解决方案</p>
+
+      <form id="form" action="/api/process" method="post" enctype="multipart/form-data">
+        <!-- 语言选择 -->
+        <div class="row">
+          <div>
+            <label for="sourceLang">原文语言</label>
+            <select id="sourceLang" name="sourceLang" aria-describedby="srcHint">
+              <option value="auto" selected>自动识别</option>
+              <option value="zh-CN">中文（简体）</option>
+              <option value="zh-TW">中文（繁體）</option>
+              <option value="en">English（英文）</option>
+              <option value="ja">日本語（日文）</option>
+              <option value="ko">한국어（韩文）</option>
+              <option value="de">Deutsch（德文）</option>
+              <option value="fr">Français（法文）</option>
+              <option value="es">Español（西班牙文）</option>
+              <option value="ru">Русский（俄文）</option>
+              <option value="pt">Português（葡萄牙文）</option>
+              <option value="it">Italiano（意大利文）</option>
+              <option value="ar">العربية（阿拉伯文）</option>
+              <option value="vi">Tiếng Việt（越南文）</option>
+              <option value="th">ไทย（泰文）</option>
+              <option value="id">Bahasa Indonesia（印尼文）</option>
+              <option value="tr">Türkçe（土耳其文）</option>
+              <option value="hi">हिन्दी（印地文）</option>
+            </select>
+          </div>
+
+          <div>
+            <label for="targetLang">目标语言</label>
+            <select id="targetLang" name="targetLang" required aria-describedby="tgtHint">
+              <option value="en" selected>English（英文）</option>
+              <option value="zh-CN">中文（简体）</option>
+              <option value="zh-TW">中文（繁體）</option>
+              <option value="ja">日本語（日文）</option>
+              <option value="ko">한국어（韩文）</option>
+              <option value="de">Deutsch（德文）</option>
+              <option value="fr">Français（法文）</option>
+              <option value="es">Español（西班牙文）</option>
+              <option value="ru">Русский（俄文）</option>
+              <option value="pt">Português（葡萄牙文）</option>
+              <option value="it">Italiano（意大利文）</option>
+              <option value="ar">العربية（阿拉伯文）</option>
+              <option value="vi">Tiếng Việt（越南文）</option>
+              <option value="th">ไทย（泰文）</option>
+              <option value="id">Bahasa Indonesia（印尼文）</option>
+              <option value="tr">Türkçe（土耳其文）</option>
+              <option value="hi">हिन्दी（印地文）</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 是否使用自定义提示词 -->
+        <label class="inline" for="usePrompt">
+          <input type="checkbox" id="usePrompt" />
+          使用自定义提示词
+        </label>
+
+        <!-- 自定义提示词容器：默认隐藏，勾选后显示 -->
+        <div id="promptWrap" class="hidden">
+          <label for="userPrompt">自定义提示词</label>
+          <textarea
+            id="userPrompt"
+            name="userPrompt"
+            placeholder="例：这篇文章与法务条款相关，翻译时请尽量使用专业法律术语；输出排版与原文保持一致。"
+            disabled
+          ></textarea>
+        </div>
+
+        <!-- 文件 -->
+        <label for="file">选择文件</label>
+        <input id="file" type="file" name="file" accept=".doc,.docx,.xls,.xlsx,.ppt,.pptx" required>
+
+        <button type="submit">使用 POI 处理</button>
+      </form>
     </div>
-    
+  </div>
+
+  <script>
+    // 语言选择持久化
+    const srcSel = document.getElementById('sourceLang');
+    const tgtSel = document.getElementById('targetLang');
+    srcSel.value = localStorage.getItem('sourceLang') || srcSel.value;
+    tgtSel.value = localStorage.getItem('targetLang') || tgtSel.value;
+    srcSel.addEventListener('change', () => localStorage.setItem('sourceLang', srcSel.value));
+    tgtSel.addEventListener('change', () => localStorage.setItem('targetLang', tgtSel.value));
+
+    // 自定义提示词开关逻辑
+    const usePrompt = document.getElementById('usePrompt');
+    const promptWrap = document.getElementById('promptWrap');
+    const userPrompt = document.getElementById('userPrompt');
+
+    function syncPromptUI() {
+      const on = usePrompt.checked;
+      promptWrap.classList.toggle('hidden', !on);
+      userPrompt.disabled = !on;
+      if (!on) userPrompt.value = ''; // 关闭时清空，避免误提交历史内容
+      localStorage.setItem('usePrompt', String(on));
+    }
+
+    // 记住上次是否使用提示词
+    usePrompt.checked = localStorage.getItem('usePrompt') === 'true';
+    syncPromptUI();
+    usePrompt.addEventListener('change', syncPromptUI);
+
+    // “非空”校验
+    document.getElementById('form').addEventListener('submit', (e) => {
+      if (usePrompt.checked) {
+        const text = userPrompt.value.trim();
+        if (text.length === 0) {
+          e.preventDefault();
+          alert('已勾选“使用自定义提示词”，但内容为空，请填写或取消勾选。');
+        }
+      }
+    });
+  </script>
 </body>
 </html>
-
-
