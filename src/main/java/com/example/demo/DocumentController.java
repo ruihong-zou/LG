@@ -10,16 +10,18 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.hslf.usermodel.HSLFSlideShow;
-import org.apache.poi.hwpf.HWPFDocument;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 
 @RestController
 @RequestMapping("/api")
 public class DocumentController {
-    
+
     @Autowired
     private DocumentProcessor documentProcessor;
+    @Autowired
+    private OfficeConvertService officeConvertService;
     
     @GetMapping("/")
     public String home() {
@@ -117,33 +119,32 @@ public ResponseEntity<byte[]> processWithPOI(
     }
     
     private ResponseEntity<byte[]> processWordDOC(MultipartFile file, String targetLang, String userPrompt) throws Exception {
-        System.out.println("处理Word DOC文件 - 使用批量翻译");
-        
-        try {
-            // 尝试作为传统DOC格式处理
-            HWPFDocument doc = new HWPFDocument(file.getInputStream());
-            
-            doc = documentProcessor.processWordDOC(doc, targetLang, userPrompt);
-            
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            doc.write(out);
-            doc.close();
-            
-            return ResponseEntity.ok()
-                    .header("Content-Disposition", "attachment; filename=batch-translated.doc")
-                    .body(out.toByteArray());
-                
-        } catch (IllegalArgumentException e) {
-            // 如果是OOXML格式，说明实际是DOCX文件，使用DOCX处理逻辑
-            if (e.getMessage().contains("OOXML")) {
-                System.out.println("检测到文件实际为DOCX格式，切换到DOCX处理逻辑");
-                return processWordDOCX(file, targetLang, userPrompt);
-            } else {
-                throw e;
-            }
+        System.out.println("处理Word DOC文件 - 先转DOCX翻译，最终仍输出DOC");
+
+        // 1) 读入原始 .doc
+        byte[] originalDoc = file.getBytes();
+
+        // 2) .doc -> .docx （只用于中间处理）
+        byte[] asDocx = officeConvertService.docToDocx(originalDoc);
+
+        // 3) 在 .docx 上执行已有的翻译逻辑
+        byte[] translatedDocx;
+        try (XWPFDocument xdoc = new XWPFDocument(new ByteArrayInputStream(asDocx));
+            ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            XWPFDocument translated = documentProcessor.processWordDocument(xdoc, targetLang, userPrompt);
+            translated.write(out);
+            translated.close();
+            translatedDocx = out.toByteArray();
         }
+
+        // 4) 将翻译后的 .docx -> .doc，保证输出扩展仍为 .doc
+        byte[] finalDoc = officeConvertService.docxToDoc(translatedDocx);
+
+        return ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename=batch-translated.doc")
+                .body(finalDoc);
     }
-    
+
     private ResponseEntity<byte[]> processPowerPointPPTX(MultipartFile file, String targetLang, String userPrompt) throws Exception {
         System.out.println("处理PowerPoint PPTX文件 - 使用批量翻译");
         XMLSlideShow ppt = new XMLSlideShow(file.getInputStream());
@@ -184,4 +185,5 @@ public ResponseEntity<byte[]> processWithPOI(
         }
     }
     
+
 }

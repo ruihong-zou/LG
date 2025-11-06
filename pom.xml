@@ -99,6 +99,20 @@
             <artifactId>poi-scratchpad</artifactId>
             <version>5.2.4</version>
         </dependency>
+
+        <!-- JODConverter Spring Boot 自动配置 -->
+        <dependency>
+            <groupId>org.jodconverter</groupId>
+            <artifactId>jodconverter-spring-boot-starter</artifactId>
+            <version>4.4.9</version>
+        </dependency>
+
+        <!-- 使用 LibreOffice UNO 的本地转换实现 -->
+        <dependency>
+            <groupId>org.jodconverter</groupId>
+            <artifactId>jodconverter-local-lo</artifactId>
+            <version>4.4.9</version>
+        </dependency>
     </dependencies>
     
     <repositories>

@@ -82,20 +82,30 @@ public class WordDocxExtractorRestorer {
             }
         }
 
-        // 2) 正文表格（cell）
+
+        // 2) 表格（run 粒度；不再整块覆盖 cell）
         for (int tIdx = 0; tIdx < doc.getTables().size(); tIdx++) {
             XWPFTable t = doc.getTables().get(tIdx);
             for (int r = 0; r < t.getRows().size(); r++) {
                 XWPFTableRow row = t.getRows().get(r);
                 for (int c = 0; c < row.getTableCells().size(); c++) {
                     XWPFTableCell cell = row.getTableCells().get(c);
-                    String txt = cell.getText();
-                    if (notBlank(txt)) {
-                        Map<String, Object> pos = new HashMap<>();
-                        pos.put("tableIndex", tIdx);
-                        pos.put("rowIndex", r);
-                        pos.put("cellIndex", c);
-                        elements.add(new TextElement(txt, "tableCell", pos));
+                    List<XWPFParagraph> paras = cell.getParagraphs();
+                    for (int pi = 0; pi < paras.size(); pi++) {
+                        XWPFParagraph p = paras.get(pi);
+                        for (int ri = 0; ri < p.getRuns().size(); ri++) {
+                            XWPFRun run = p.getRuns().get(ri);
+                            String text = run.getText(0);
+                            if (notBlank(text)) {
+                                Map<String, Object> pos = new HashMap<>();
+                                pos.put("tableIndex", tIdx);
+                                pos.put("rowIndex", r);
+                                pos.put("cellIndex", c);
+                                pos.put("paraInCell", pi);
+                                pos.put("runInPara", ri);
+                                elements.add(new TextElement(text, "tableRun", pos));
+                            }
+                        }
                     }
                 }
             }
@@ -290,7 +300,7 @@ public class WordDocxExtractorRestorer {
 
     /** 回填：正文 run/表格 + 文本框 + SDT（仅在内存 CT 上修改，随后对 doc.write(...) 序列化即可） */
     public static void restoreWordTexts(XWPFDocument doc, List<TextElement> elements, List<String> translated) {
-        // 1) 先回填原有的 run / tableCell
+        // 1) run & tableRun：就地改字，完全保留 rPr
         for (int i = 0; i < elements.size(); i++) {
             TextElement el = elements.get(i);
             String t = translated.get(i);
@@ -301,17 +311,16 @@ public class WordDocxExtractorRestorer {
                 XWPFRun run = doc.getParagraphs().get(p).getRuns().get(r);
                 run.setText(t, 0);
 
-            } else if ("tableCell".equals(el.type)) {
+            } else if ("tableRun".equals(el.type)) {
                 int ti = (Integer) el.position.get("tableIndex");
                 int ri = (Integer) el.position.get("rowIndex");
                 int ci = (Integer) el.position.get("cellIndex");
-                XWPFTable table = doc.getTables().get(ti);
-                XWPFTableCell cell = table.getRows().get(ri).getTableCells().get(ci);
-                // 清空并写入
-                while (cell.getParagraphs().size() > 0) cell.removeParagraph(0);
-                XWPFParagraph pNew = cell.addParagraph();
-                XWPFRun rNew = pNew.createRun();
-                rNew.setText(t);
+                int pi = (Integer) el.position.get("paraInCell");
+                int rui = (Integer) el.position.get("runInPara");
+                XWPFRun run = doc.getTables().get(ti)
+                        .getRow(ri).getCell(ci)
+                        .getParagraphArray(pi).getRuns().get(rui);
+                run.setText(t, 0);
             }
         }
 
@@ -501,85 +510,142 @@ public class WordDocxExtractorRestorer {
         }
     }
 
-    // === 写入：文本框 ===
+    // === 公用：就地替换，完整保留样式（优先策略） ===
+    private static boolean replaceTextPreserveFormatting(XmlObject scope, String text) {
+        // 找到第一个 w:r 作为“样式承载”
+        org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR firstRun = null;
+        try (XmlCursor cur = scope.newCursor()) {
+            cur.selectPath("declare namespace w='" + NS_W + "' .//w:r");
+            if (cur.toNextSelection()) {
+                firstRun = (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR) cur.getObject();
+            }
+        } catch (Exception ignore) {}
+
+        if (firstRun == null) {
+            // 没有任何 run：退化为“就地替换所有 w:t”的兜底
+            return replaceAllWTInScope(scope, text);
+        }
+
+        // 清掉 firstRun 内现有 w:t
+        try (XmlCursor rc = firstRun.newCursor()) {
+            rc.selectPath("declare namespace w='" + NS_W + "' ./w:t");
+            while (rc.toNextSelection()) rc.removeXml();
+        } catch (Exception ignore) {}
+
+        // 写入文本（处理换行 → w:br）
+        String[] lines = splitPreserveEmpty(text);
+        for (int i = 0; i < lines.length; i++) {
+            if (i > 0) firstRun.addNewBr();
+            var t = firstRun.addNewT();
+            t.setStringValue(lines[i]);
+            try (XmlCursor tc = t.newCursor()) { tc.setAttributeText(QN_XML_SPACE, "preserve"); } catch (Exception ignore) {}
+        }
+
+        // 其它 w:t 清空，避免残留
+        try (XmlCursor cur = scope.newCursor()) {
+            cur.selectPath("declare namespace w='" + NS_W + "' .//w:t");
+            boolean skippedFirst = false;
+            while (cur.toNextSelection()) {
+                if (!skippedFirst) { skippedFirst = true; continue; }
+                cur.setTextValue("");
+            }
+        } catch (Exception ignore) {}
+
+        return true;
+    }
+
+    // === 写入：文本框（优先就地；必要时重建 + 拷贝样式） ===
     private static boolean setTextBoxText(XmlObject txbxNode, String text) {
-        // 尝试类型化（成功则清空重建），失败走兜底
+        // 优先：就地改字，完全保留 pPr/rPr
+        if (replaceTextPreserveFormatting(txbxNode, text)) return true;
+
+        // 备选：重建，但复制第一段/第一 run 的样式为模板
         try {
-            org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTxbxContent tx =
-                (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTxbxContent)
+            var tx = (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTxbxContent)
                     txbxNode.changeType(org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTxbxContent.type);
             if (tx != null) {
+                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPPr pprTpl = null;
+                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTRPr rprTpl = null;
+                if (tx.sizeOfPArray() > 0) {
+                    var p0 = tx.getPArray(0);
+                    pprTpl = p0.getPPr();
+                    if (p0.sizeOfRArray() > 0) rprTpl = p0.getRArray(0).getRPr();
+                }
+
                 while (tx.sizeOfPArray() > 0) tx.removeP(0);
                 String[] lines = splitPreserveEmpty(text);
                 for (String line : lines) {
-                    org.openxmlformats.schemas.wordprocessingml.x2006.main.CTP p = tx.addNewP();
-                    org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR r = p.addNewR();
-                    org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText t = r.addNewT();
-                    t.setStringValue(line);
-                    try (XmlCursor tc = t.newCursor()) {
-                        // 先属性后文本（这里文本已经在 t 上设了，属性作为元素属性写入不报错）
-                        tc.setAttributeText(QN_XML_SPACE, "preserve");
-                    } catch (Exception ignore) {}
+                    var p = tx.addNewP();
+                    if (pprTpl != null) p.addNewPPr().set(pprTpl);
+                    var r = p.addNewR();
+                    if (rprTpl != null) r.addNewRPr().set(rprTpl);
+                    var t = r.addNewT(); t.setStringValue(line);
+                    try (XmlCursor tc = t.newCursor()) { tc.setAttributeText(QN_XML_SPACE, "preserve"); } catch (Exception ignore) {}
                 }
                 return true;
             }
-        } catch (Exception ignore) { /* fallback */ }
-        // 兜底：作用域内就地替换所有 w:t
+        } catch (Exception ignore) {}
         return replaceAllWTInScope(txbxNode, text);
     }
-
-    // === 写入：SDT（块级/行级），最终兜底就地替换 w:t ===
+    
+    // === 写入：SDT（优先就地；必要时重建 + 拷贝样式） ===
     private static boolean setSdtContentText(XmlObject sdtNode, String text) {
         XmlObject sdtContent = null;
         try (XmlCursor cur = sdtNode.newCursor()) {
             if (cur.toFirstChild()) {
                 do {
-                    if (QN_W_SDTCONTENT.equals(cur.getName())) {
-                        sdtContent = cur.getObject();
-                        break;
-                    }
+                    if (QN_W_SDTCONTENT.equals(cur.getName())) { sdtContent = cur.getObject(); break; }
                 } while (cur.toNextSibling());
             }
         }
         if (sdtContent == null) return false;
 
-        // 尝试块级
+        // 优先：就地改字（完整保留 pPr/rPr）
+        if (replaceTextPreserveFormatting(sdtContent, text)) return true;
+
+        // 备选1：块级重建（复制模板样式）
         try {
-            org.openxmlformats.schemas.wordprocessingml.x2006.main.CTSdtContentBlock blk =
-                (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTSdtContentBlock)
+            var blk = (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTSdtContentBlock)
                     sdtContent.changeType(org.openxmlformats.schemas.wordprocessingml.x2006.main.CTSdtContentBlock.type);
             if (blk != null) {
+                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPPr pprTpl = null;
+                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTRPr rprTpl = null;
+                if (blk.sizeOfPArray() > 0) {
+                    var p0 = blk.getPArray(0);
+                    pprTpl = p0.getPPr();
+                    if (p0.sizeOfRArray() > 0) rprTpl = p0.getRArray(0).getRPr();
+                }
+
                 while (blk.sizeOfPArray() > 0) blk.removeP(0);
                 String[] lines = splitPreserveEmpty(text);
                 for (String line : lines) {
-                    org.openxmlformats.schemas.wordprocessingml.x2006.main.CTP p = blk.addNewP();
-                    org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR r = p.addNewR();
-                    org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText t = r.addNewT();
-                    t.setStringValue(line);
-                    try (XmlCursor tc = t.newCursor()) {
-                        tc.setAttributeText(QN_XML_SPACE, "preserve");
-                    } catch (Exception ignore) {}
+                    var p = blk.addNewP();
+                    if (pprTpl != null) p.addNewPPr().set(pprTpl);
+                    var r = p.addNewR();
+                    if (rprTpl != null) r.addNewRPr().set(rprTpl);
+                    var t = r.addNewT(); t.setStringValue(line);
+                    try (XmlCursor tc = t.newCursor()) { tc.setAttributeText(QN_XML_SPACE, "preserve"); } catch (Exception ignore) {}
                 }
                 return true;
             }
         } catch (Exception ignore) {}
 
-        // 尝试行级
+        // 备选2：行级重建（复制模板样式）
         try {
-            org.openxmlformats.schemas.wordprocessingml.x2006.main.CTSdtContentRun run =
-                (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTSdtContentRun)
+            var run = (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTSdtContentRun)
                     sdtContent.changeType(org.openxmlformats.schemas.wordprocessingml.x2006.main.CTSdtContentRun.type);
             if (run != null) {
+                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTRPr rprTpl = null;
+                if (run.sizeOfRArray() > 0) rprTpl = run.getRArray(0).getRPr();
+
                 while (run.sizeOfRArray() > 0) run.removeR(0);
                 String[] lines = splitPreserveEmpty(text);
                 for (int i = 0; i < lines.length; i++) {
                     String line = lines[i];
-                    org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR r = run.addNewR();
-                    org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText t = r.addNewT();
-                    t.setStringValue(line);
-                    try (XmlCursor tc = t.newCursor()) {
-                        tc.setAttributeText(QN_XML_SPACE, "preserve");
-                    } catch (Exception ignore) {}
+                    var r = run.addNewR();
+                    if (rprTpl != null) r.addNewRPr().set(rprTpl);
+                    var t = r.addNewT(); t.setStringValue(line);
+                    try (XmlCursor tc = t.newCursor()) { tc.setAttributeText(QN_XML_SPACE, "preserve"); } catch (Exception ignore) {}
                     if (i < lines.length - 1) r.addNewBr();
                 }
                 return true;
@@ -589,7 +655,7 @@ public class WordDocxExtractorRestorer {
         // 兜底
         return replaceAllWTInScope(sdtContent, text);
     }
-
+    
     /** 在给定作用域就地替换所有 <w:t>：第一个写 newText，其余清空；先设 xml:space="preserve"，再写文本 */
     private static boolean replaceAllWTInScope(XmlObject scope, String newText) {
         boolean found = false;

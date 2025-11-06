@@ -25,9 +25,6 @@ public class TranslateService {
 
     private static final int PARALLELISM             = getEnvInt("MOONSHOT_CONCURRENCY", 32); // 与 Kimi 限流器一致
 
-    private static final Kimi.Direction DEFAULT_DIR =
-            parseDir(System.getenv().getOrDefault("TRANSLATE_DIRECTION", "ZH2EN"));
-
     // —— 策略/诊断开关（沿用你已有的） ——
     private static final boolean TRIVIAL_PASSTHROUGH =
             Boolean.parseBoolean(System.getenv().getOrDefault("TRANSLATE_TRIVIAL_PASSTHROUGH","true"));
@@ -36,7 +33,6 @@ public class TranslateService {
     private static final int LOG_PREVIEW_CHARS = getEnvInt("TRANSLATE_LOG_PREVIEW_CHARS", 30);
 
     private static int getEnvInt(String k, int d){ try { return Integer.parseInt(System.getenv().getOrDefault(k, String.valueOf(d))); } catch(Exception e){ return d; } }
-    private static Kimi.Direction parseDir(String v){ return "EN2ZH".equalsIgnoreCase(v) ? Kimi.Direction.EN2ZH : Kimi.Direction.ZH2EN; }
 
     /** 粗略输出系数：CJK 语言更紧凑，其它语种略膨胀（仅用于切片预算） */
     private static double outputFactorFor(String targetLang) {

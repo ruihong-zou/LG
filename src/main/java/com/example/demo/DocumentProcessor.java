@@ -33,10 +33,10 @@ public class DocumentProcessor {
     }
     
     // 1. Word DOCX文档处理
-    public XWPFDocument processWordDocument(XWPFDocument doc, String targetLang, String userPrompt) throws Exception {
+    public XWPFDocument processWordDocument(XWPFDocument docx, String targetLang, String userPrompt) throws Exception {
         System.out.println("开始批量处理Word文档");
 
-        List<WordDocxExtractorRestorer.TextElement> elements = WordDocxExtractorRestorer.extractWordTexts(doc);
+        List<WordDocxExtractorRestorer.TextElement> elements = WordDocxExtractorRestorer.extractWordTexts(docx);
         System.out.println("提取到 " + elements.size() + " 个文本元素");
         
         List<String> texts = new ArrayList<>();
@@ -46,9 +46,9 @@ public class DocumentProcessor {
 
         List<String> translatedTexts = translateService.batchTranslate(texts, targetLang, userPrompt);
 
-        WordDocxExtractorRestorer.restoreWordTexts(doc, elements, translatedTexts);
+        WordDocxExtractorRestorer.restoreWordTexts(docx, elements, translatedTexts);
         
-        return doc;
+        return docx;
     }
    
     // 2. Excel XLSX文档处理
@@ -274,10 +274,8 @@ public class DocumentProcessor {
     // 4. Word DOC处理
     public HWPFDocument processWordDOC(HWPFDocument doc, String targetLang, String userPrompt) throws Exception {
         System.out.println("开始批量处理 .doc 文档");
-
         List<WordDocExtractorRestorer.TextElement> elements = WordDocExtractorRestorer.extractWordTexts(doc);
         System.out.println("提取到 " + elements.size() + " 个文本元素");
-        
         // 提取原文去翻译
         List<String> originals = new ArrayList<>();
         for (WordDocExtractorRestorer.TextElement el : elements) {
@@ -285,9 +283,7 @@ public class DocumentProcessor {
         }
         // 批量翻译
         List<String> translated = translateService.batchTranslate(originals, targetLang, userPrompt);
-
         System.out.println("翻译完成，开始写回文档");
-
         // 写回翻译结果
         WordDocExtractorRestorer.restoreWordTexts(doc, elements, translated);
         return doc;
