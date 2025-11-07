@@ -51,6 +51,9 @@ cd LG
 .env.example文件使用说明
 1) 复制本文件为 .env 并填写 MOONSHOT_API_KEY
 2) 将 .env 加入 .gitignore（保护密钥；生产用环境注入）
+3) 安装libreoffice，过因为qiang原因请使用镜像
+- 官网：https://www.libreoffice.org/donate/dl/win-x86_64/25.8.2/zh-CN/LibreOffice_25.8.2_Win_x86-64.msi
+- 镜像25.2.7版本：https://mirrors.cloud.tencent.com/libreoffice/libreoffice/stable/25.2.7/
 
 本地加载示例：
   macOS/Linux:
@@ -73,6 +76,9 @@ Get-Content .env | ForEach-Object {
 
 mvn clean package
 mvn spring-boot:run
+
+
+
 # 浏览器访问：
 http://localhost:8080
 ```
