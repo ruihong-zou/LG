@@ -81,7 +81,7 @@ public final class Kimi {
         messages.add(new MoonshotMessage("user", userPrompt));
 
         for (int attempt = 0; attempt < 3; attempt++) {
-            String resp = chatNoStreamWithFinishReason("kimi-k2-0905-preview", messages);
+            String resp = chatNoStreamWithFinishReason("kimi-k2-turbo-preview", messages);
             String finish = parseFinishReason(resp);
             if ("length".equals(finish)) throw new IOException("API输出被截断（finish_reason=length）");
 
