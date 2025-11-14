@@ -65,7 +65,7 @@ public final class Kimi {
             "3) 禁止合并/拆分/增删片段；禁止添加任何解释或标注；" +
             "4) 仅对纯标点/表情/特殊符号可原样返回；" +
             "5) 输出必须是紧凑单行 JSON：{\"translations\":[...]}，无换行/无解释，并正确转义；" +
-            "6) 所有可翻译内容均转为「" + targetName + "」，不保留源语言词汇（专有名词可按常规译名或保留）。";
+            "6) 必须将所有可翻译内容均转为「" + targetName + "」，不保留源语言词汇。";
 
         String safePref = sanitizeUserInstruction(userInstruction);
         final String prefPrompt = (safePref == null || safePref.isEmpty()) ? null
