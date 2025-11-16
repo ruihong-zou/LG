@@ -1,5 +1,6 @@
 package com.example.demo;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.xwpf.usermodel.*;
 import org.apache.xmlbeans.XmlCursor;
 import org.apache.xmlbeans.XmlObject;
@@ -11,6 +12,7 @@ import java.util.*;
 import java.util.regex.Pattern;
 
 /** 支持 DOCX 正文/表格“按格式合并后的段片”提取与回填，支持文本框 run 与文本框外 SDT 的定位回填 */
+@Slf4j
 public class WordDocxExtractorRestorer {
 
     public static class TextElement {
@@ -53,6 +55,7 @@ public class WordDocxExtractorRestorer {
 
     private static final String PARA_SEP = "\u2029";
     private static final Pattern ANY_BREAK = Pattern.compile("\r\n|\r|\n|\u2028|\u2029|\u000B|\u000C|\u0085");
+    private static final int RAW_LOG_LIMIT = 200;
 
     /** 提取正文/表格段片 + 文本框 run + 文本框外 SDT */
     public static List<TextElement> extractWordTexts(XWPFDocument doc) {
@@ -62,6 +65,7 @@ public class WordDocxExtractorRestorer {
         List<XWPFParagraph> paras = doc.getParagraphs();
         for (int pIdx = 0; pIdx < paras.size(); pIdx++) {
             XWPFParagraph p = paras.get(pIdx);
+            logRawParagraphRuns(p, pIdx);
             List<FormatChangeSegmenter.Segment> segs = FormatChangeSegmenter.segmentParagraph(p, MergePolicy.loose());
             for (FormatChangeSegmenter.Segment seg : segs) {
                 if (notBlank(seg.text)) {
@@ -84,6 +88,7 @@ public class WordDocxExtractorRestorer {
                     List<XWPFParagraph> ps = cell.getParagraphs();
                     for (int pi = 0; pi < ps.size(); pi++) {
                         XWPFParagraph p = ps.get(pi);
+                        logRawCellRuns(p, tIdx, r, c, pi);
                         List<FormatChangeSegmenter.Segment> segs = FormatChangeSegmenter.segmentParagraph(p, MergePolicy.loose());
                         for (FormatChangeSegmenter.Segment seg : segs) {
                             if (notBlank(seg.text)) {
@@ -105,6 +110,41 @@ public class WordDocxExtractorRestorer {
         // 文本框 run + 文本框外 SDT
         collectDocXmlContainers(doc.getDocument(), elements);
         return elements;
+    }
+
+    private static void logRawParagraphRuns(XWPFParagraph paragraph, int paragraphIndex) {
+        if (!log.isDebugEnabled() || paragraph == null) return;
+        List<XWPFRun> runs = paragraph.getRuns();
+        if (runs == null) return;
+        for (int rIdx = 0; rIdx < runs.size(); rIdx++) {
+            log.debug("POI raw para[{}] run[{}]: {}", paragraphIndex, rIdx, previewRaw(runText(runs.get(rIdx))));
+        }
+    }
+
+    private static void logRawCellRuns(XWPFParagraph paragraph, int tableIndex, int rowIndex, int cellIndex, int paraIndex) {
+        if (!log.isDebugEnabled() || paragraph == null) return;
+        List<XWPFRun> runs = paragraph.getRuns();
+        if (runs == null) return;
+        for (int rIdx = 0; rIdx < runs.size(); rIdx++) {
+            log.debug("POI raw table[{}][{}][{}] para[{}] run[{}]: {}",
+                    tableIndex, rowIndex, cellIndex, paraIndex, rIdx, previewRaw(runText(runs.get(rIdx))));
+        }
+    }
+
+    private static String runText(XWPFRun run) {
+        if (run == null) return "";
+        String txt = run.toString();
+        if (txt == null || txt.isEmpty()) {
+            String alt = run.getText(0);
+            if (alt != null) txt = alt;
+        }
+        return txt == null ? "" : txt;
+    }
+
+    private static String previewRaw(String text) {
+        if (text == null) return "(null)";
+        if (text.length() <= RAW_LOG_LIMIT) return text;
+        return text.substring(0, RAW_LOG_LIMIT) + "...(len=" + text.length() + ")";
     }
 
     /** 回填：段片原位写回 + 文本框 run/SDT 写回 */

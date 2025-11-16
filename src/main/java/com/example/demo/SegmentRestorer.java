@@ -1,3 +1,4 @@
+// File: src/main/java/com/example/demo/SegmentRestorer.java
 package com.example.demo;
 
 import org.apache.poi.xwpf.usermodel.*;
@@ -11,7 +12,6 @@ import java.util.Map;
 public final class SegmentRestorer {
     private SegmentRestorer() {}
     private static final String NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-    private static final int MAX_T_CHUNK = 512; // 单个 <w:t> 最大字符数，超出则切片
 
     /** 模板选择策略 */
     public enum TemplateMode { FIRST_RUN, MAJORITY_STYLE, LONGEST_TEXT }
@@ -72,6 +72,7 @@ public final class SegmentRestorer {
         }
     }
 
+    /** 每一行写入一个 <w:t xml:space="preserve">（不分片） */
     private static void writeTextToRun(XWPFRun r, String text) {
         if (text == null) text = "";
         String s = text.replace("\r\n","\n").replace('\r','\n')
@@ -84,23 +85,10 @@ public final class SegmentRestorer {
             c.toEndToken();
             for (int i = 0; i < lines.length; i++) {
                 if (i > 0) { c.beginElement(new QName(NS_W, "br")); c.toParent(); }
-                String line = lines[i] == null ? "" : lines[i];
-                int off = 0, n = line.length();
-                if (n == 0) {
-                    c.beginElement(new QName(NS_W, "t"));
-                    c.insertAttributeWithValue(new QName("http://www.w3.org/XML/1998/namespace","space","xml"), "preserve");
-                    c.insertChars("");
-                    c.toParent();
-                } else {
-                    while (off < n) {
-                        int end = Math.min(off + MAX_T_CHUNK, n);
-                        c.beginElement(new QName(NS_W, "t"));
-                        c.insertAttributeWithValue(new QName("http://www.w3.org/XML/1998/namespace","space","xml"), "preserve");
-                        c.insertChars(line.substring(off, end));
-                        c.toParent();
-                        off = end;
-                    }
-                }
+                c.beginElement(new QName(NS_W, "t"));
+                c.insertAttributeWithValue(new QName("http://www.w3.org/XML/1998/namespace","space","xml"), "preserve");
+                c.insertChars(lines[i] == null ? "" : lines[i]);
+                c.toParent();
             }
         }
     }

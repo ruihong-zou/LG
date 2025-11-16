@@ -29,6 +29,7 @@ public final class Kimi {
 
     // 并发上限（不“串行”卡死；按机器核数/网速调；不填默认 32）
     private static final int CONCURRENCY_LIMIT = getEnvInt("MOONSHOT_CONCURRENCY", 32);
+    private static final int LOG_PREVIEW_MAX = 2000;
 
     private static int getEnvInt(String k, int d){
         try { return Integer.parseInt(System.getenv().getOrDefault(k, String.valueOf(d))); }
@@ -74,6 +75,9 @@ public final class Kimi {
         final String userPrompt = expectedCount > 0
                 ? String.format("请翻译 JSON 中 %d 个片段，输出 translations 数组与输入 texts 数量一致：%s", expectedCount, jsonTexts)
                 : "请翻译以下 JSON 格式内容，输出 translations 与 texts 数量一致：" + jsonTexts;
+
+        log.debug("Kimi request planned: targetLang={}, texts={}, payloadPreview={}",
+                targetLang, expectedCount, previewForLog(jsonTexts));
 
         List<MoonshotMessage> messages = new ArrayList<>(3);
         messages.add(new MoonshotMessage("system", systemPrompt));
@@ -162,6 +166,8 @@ public final class Kimi {
                     .callTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
                     .build();
 
+            log.debug("[Kimi] sending payload: {}", previewForLog(requestBody));
+
             Request req = new Request.Builder()
                     .url(CHAT_COMPLETION_URL)
                     .post(RequestBody.create(requestBody, MediaType.get("application/json")))
@@ -171,6 +177,7 @@ public final class Kimi {
             try (Response resp = client.newCall(req).execute()) {
                 if (resp.body() == null) throw new IOException("空响应体");
                 String body = resp.body().string();
+                log.debug("[Kimi] response code={} body={}", resp.code(), previewForLog(body));
                 if (resp.code() >= 400) throw new IOException("HTTP " + resp.code() + ": " + body);
                 return body;
             }
@@ -318,5 +325,11 @@ public final class Kimi {
             catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new RuntimeException("并发信号量获取被中断", e); }
         }
         private void releaseConcurrency() { concurrency.release(); }
+    }
+
+    private static String previewForLog(String text) {
+        if (text == null) return "(null)";
+        if (text.length() <= LOG_PREVIEW_MAX) return text;
+        return text.substring(0, LOG_PREVIEW_MAX) + "...(truncated totalLen=" + text.length() + ")";
     }
 }

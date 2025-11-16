@@ -1,5 +1,6 @@
 package com.example.demo;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -13,6 +14,7 @@ import org.apache.poi.hslf.usermodel.*;
 
 import java.util.*;
 
+@Slf4j
 @Component
 public class DocumentProcessor {
     
@@ -38,6 +40,10 @@ public class DocumentProcessor {
 
         List<WordDocxExtractorRestorer.TextElement> elements = WordDocxExtractorRestorer.extractWordTexts(docx);
         System.out.println("提取到 " + elements.size() + " 个文本元素");
+
+        for (int i = 0; i < elements.size(); i++) {
+            log.debug("DOCX element[{}]: {}", i, preview(elements.get(i).text));
+        }
         
         List<String> texts = new ArrayList<>();
         for (WordDocxExtractorRestorer.TextElement element : elements) {
@@ -269,6 +275,13 @@ public class DocumentProcessor {
     private static <T> T safeGet(List<T> list, Integer idx) {
         if (list == null || idx == null) return null;
         return (idx >= 0 && idx < list.size()) ? list.get(idx) : null;
+    }
+
+    private static String preview(String text) {
+        if (text == null) return "(null)";
+        int limit = 200;
+        if (text.length() <= limit) return text;
+        return text.substring(0, limit) + "...(len=" + text.length() + ")";
     }
     
     // 4. Word DOC处理

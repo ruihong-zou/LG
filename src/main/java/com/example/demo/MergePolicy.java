@@ -33,7 +33,7 @@ public final class MergePolicy {
     public static MergePolicy loose() {
         return new Builder()
             .fontSizeTolerancePt(1.0)
-            .charSpacingTolerance(30)
+            .charSpacingTolerance(100)
             .ignoreFontFamilyNullVsExplicit(true)
             .ignoreColorAutoVsNull(true)
             .ignoreAllColorDiff(false)
@@ -48,7 +48,7 @@ public final class MergePolicy {
 
     public static final class Builder {
         private double fontSizeTolerancePt = 1.0;
-        private int charSpacingTolerance = 30;
+        private int charSpacingTolerance = 100;
         private boolean ignoreFontFamilyNullVsExplicit = true;
         private boolean ignoreColorAutoVsNull = true;
         private boolean ignoreAllColorDiff = false;
