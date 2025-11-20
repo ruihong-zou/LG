@@ -1,6 +1,6 @@
+// File: src/main/java/com/example/demo/WordDocxExtractorRestorer.java
 package com.example.demo;
 
-import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.xwpf.usermodel.*;
 import org.apache.xmlbeans.XmlCursor;
 import org.apache.xmlbeans.XmlObject;
@@ -11,8 +11,7 @@ import java.io.ByteArrayOutputStream;
 import java.util.*;
 import java.util.regex.Pattern;
 
-/** 支持 DOCX 正文/表格“按格式合并后的段片”提取与回填，支持文本框 run 与文本框外 SDT 的定位回填 */
-@Slf4j
+/** 支持：段片提取/回填；文本框 run 提取/回填；外层 SDT 回填。含 <w:tab/> 的 run 作为硬边界保留。 */
 public class WordDocxExtractorRestorer {
 
     public static class TextElement {
@@ -27,7 +26,7 @@ public class WordDocxExtractorRestorer {
 
     private static class XmlChange {
         final String type;   // "docxTextBoxRun" | "docxSdtField"
-        final String part;   // "/word/document.xml"
+        final String part;
         final String sdtPath;
         final String boxPath;
         final String alias;
@@ -55,17 +54,14 @@ public class WordDocxExtractorRestorer {
 
     private static final String PARA_SEP = "\u2029";
     private static final Pattern ANY_BREAK = Pattern.compile("\r\n|\r|\n|\u2028|\u2029|\u000B|\u000C|\u0085");
-    private static final int RAW_LOG_LIMIT = 200;
 
-    /** 提取正文/表格段片 + 文本框 run + 文本框外 SDT */
     public static List<TextElement> extractWordTexts(XWPFDocument doc) {
         List<TextElement> elements = new ArrayList<>();
 
-        // 正文段片（段内按“宽松合并”）
+        // 正文段片
         List<XWPFParagraph> paras = doc.getParagraphs();
         for (int pIdx = 0; pIdx < paras.size(); pIdx++) {
             XWPFParagraph p = paras.get(pIdx);
-            logRawParagraphRuns(p, pIdx);
             List<FormatChangeSegmenter.Segment> segs = FormatChangeSegmenter.segmentParagraph(p, MergePolicy.loose());
             for (FormatChangeSegmenter.Segment seg : segs) {
                 if (notBlank(seg.text)) {
@@ -88,7 +84,6 @@ public class WordDocxExtractorRestorer {
                     List<XWPFParagraph> ps = cell.getParagraphs();
                     for (int pi = 0; pi < ps.size(); pi++) {
                         XWPFParagraph p = ps.get(pi);
-                        logRawCellRuns(p, tIdx, r, c, pi);
                         List<FormatChangeSegmenter.Segment> segs = FormatChangeSegmenter.segmentParagraph(p, MergePolicy.loose());
                         for (FormatChangeSegmenter.Segment seg : segs) {
                             if (notBlank(seg.text)) {
@@ -107,49 +102,12 @@ public class WordDocxExtractorRestorer {
             }
         }
 
-        // 文本框 run + 文本框外 SDT
+        // 文本框 run（跳过含 tab 的 run） + 文本框外 SDT
         collectDocXmlContainers(doc.getDocument(), elements);
         return elements;
     }
 
-    private static void logRawParagraphRuns(XWPFParagraph paragraph, int paragraphIndex) {
-        if (!log.isDebugEnabled() || paragraph == null) return;
-        List<XWPFRun> runs = paragraph.getRuns();
-        if (runs == null) return;
-        for (int rIdx = 0; rIdx < runs.size(); rIdx++) {
-            log.debug("POI raw para[{}] run[{}]: {}", paragraphIndex, rIdx, previewRaw(runText(runs.get(rIdx))));
-        }
-    }
-
-    private static void logRawCellRuns(XWPFParagraph paragraph, int tableIndex, int rowIndex, int cellIndex, int paraIndex) {
-        if (!log.isDebugEnabled() || paragraph == null) return;
-        List<XWPFRun> runs = paragraph.getRuns();
-        if (runs == null) return;
-        for (int rIdx = 0; rIdx < runs.size(); rIdx++) {
-            log.debug("POI raw table[{}][{}][{}] para[{}] run[{}]: {}",
-                    tableIndex, rowIndex, cellIndex, paraIndex, rIdx, previewRaw(runText(runs.get(rIdx))));
-        }
-    }
-
-    private static String runText(XWPFRun run) {
-        if (run == null) return "";
-        String txt = run.toString();
-        if (txt == null || txt.isEmpty()) {
-            String alt = run.getText(0);
-            if (alt != null) txt = alt;
-        }
-        return txt == null ? "" : txt;
-    }
-
-    private static String previewRaw(String text) {
-        if (text == null) return "(null)";
-        if (text.length() <= RAW_LOG_LIMIT) return text;
-        return text.substring(0, RAW_LOG_LIMIT) + "...(len=" + text.length() + ")";
-    }
-
-    /** 回填：段片原位写回 + 文本框 run/SDT 写回 */
     public static void restoreWordTexts(XWPFDocument doc, List<TextElement> elements, List<String> translated) {
-        // 1) 段片原位回填（正文/表格）——分组并倒序处理，避免索引漂移
         Map<Integer, List<Integer>> paraGroups = new HashMap<>();
         Map<String, List<Integer>> cellGroups = new HashMap<>();
 
@@ -165,7 +123,6 @@ public class WordDocxExtractorRestorer {
             }
         }
 
-        // 1.1 正文段处理
         for (Map.Entry<Integer, List<Integer>> e : paraGroups.entrySet()) {
             int pIdx = e.getKey();
             XWPFParagraph p = doc.getParagraphs().get(pIdx);
@@ -173,7 +130,7 @@ public class WordDocxExtractorRestorer {
             e.getValue().sort((i1, i2) -> {
                 int s1 = (Integer) elements.get(i1).position.get("runStartIndex");
                 int s2 = (Integer) elements.get(i2).position.get("runStartIndex");
-                return Integer.compare(s2, s1); // 倒序
+                return Integer.compare(s2, s1);
             });
 
             for (int idx : e.getValue()) {
@@ -185,7 +142,6 @@ public class WordDocxExtractorRestorer {
             SegmentRestorer.stripProofErr(p);
         }
 
-        // 1.2 表格段处理
         for (Map.Entry<String, List<Integer>> e : cellGroups.entrySet()) {
             String[] parts = e.getKey().split("\\|");
             int ti = Integer.parseInt(parts[0]);
@@ -198,7 +154,7 @@ public class WordDocxExtractorRestorer {
             e.getValue().sort((i1, i2) -> {
                 int s1 = (Integer) elements.get(i1).position.get("runStartIndex");
                 int s2 = (Integer) elements.get(i2).position.get("runStartIndex");
-                return Integer.compare(s2, s1); // 倒序
+                return Integer.compare(s2, s1);
             });
 
             for (int idx : e.getValue()) {
@@ -210,7 +166,6 @@ public class WordDocxExtractorRestorer {
             SegmentRestorer.stripProofErr(p);
         }
 
-        // 2) 文本框 run 与 SDT 的待应用变更收集
         Map<String, List<XmlChange>> changesByPart = new HashMap<>();
         for (int i = 0; i < elements.size(); i++) {
             TextElement el = elements.get(i);
@@ -235,14 +190,11 @@ public class WordDocxExtractorRestorer {
             }
         }
 
-        // 3) 应用到内存 CT（document.xml）
         List<XmlChange> docChanges = changesByPart.get("/word/document.xml");
         if (docChanges != null && !docChanges.isEmpty()) {
             applyChangesToPart(doc.getDocument(), docChanges);
         }
     }
-
-    // ====== 文本框与 SDT 的 XML 扫描/写回 ======
 
     private static void collectDocXmlContainers(XmlObject root, List<TextElement> out) {
         Deque<Integer> sdtStack = new ArrayDeque<>();
@@ -298,6 +250,7 @@ public class WordDocxExtractorRestorer {
                             int runOrd = 0;
                             while (rc.toNextSelection()) {
                                 XmlObject rObj = rc.getObject();
+                                if (runHasTabXml(rObj)) { runOrd++; continue; } // 跳过含 tab 的 run
                                 String txt = getRunTextPreserveBrTab(rObj);
                                 if (notBlank(txt)) {
                                     Map<String, Object> pos = new HashMap<>();
@@ -473,19 +426,21 @@ public class WordDocxExtractorRestorer {
         }
     }
 
+    /** 文本框：若目标 run 含 <w:tab/> 则不做写入与清理 */
     private static boolean setTextBoxRunTextByOrdinal(XmlObject txbxNode, int runOrd, String text) {
         try (XmlCursor rc = txbxNode.newCursor()) {
             rc.selectPath("declare namespace w='" + NS_W + "' .//w:r");
             int idx = 0;
             while (rc.toNextSelection()) {
+                XmlObject r = rc.getObject();
                 if (idx == runOrd) {
-                    XmlObject r = rc.getObject();
+                    if (runHasTabXml(r)) return true; // 保留
                     try (XmlCursor c = r.newCursor()) {
                         if (c.toFirstChild()) {
                             do {
                                 QName n = c.getName(); if (n == null) continue;
                                 String ln = n.getLocalPart();
-                                if ("t".equals(ln) || "br".equals(ln) || "cr".equals(ln) || "tab".equals(ln) || "instrText".equals(ln)) {
+                                if ("t".equals(ln) || "br".equals(ln) || "cr".equals(ln) || "instrText".equals(ln)) {
                                     c.removeXml();
                                 }
                             } while (c.toNextSibling());
@@ -514,6 +469,7 @@ public class WordDocxExtractorRestorer {
         return false;
     }
 
+    /** SDT：若内容包含 <w:tab/>，只覆盖现有 <w:t> 文本，不重建结构 */
     private static boolean setSdtContentText(XmlObject sdtNode, String text) {
         XmlObject sdtContent = null;
         try (XmlCursor cur = sdtNode.newCursor()) {
@@ -523,6 +479,10 @@ public class WordDocxExtractorRestorer {
             }
         }
         if (sdtContent == null) return false;
+
+        if (scopeHasTab(sdtContent)) {
+            return replaceAllWTInScope(sdtContent, text);
+        }
 
         try {
             var blk = (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTSdtContentBlock)
@@ -601,6 +561,20 @@ public class WordDocxExtractorRestorer {
         return found;
     }
 
+    private static boolean scopeHasTab(XmlObject scope) {
+        try (XmlCursor cur = scope.newCursor()) {
+            cur.selectPath("declare namespace w='" + NS_W + "' .//w:tab");
+            return cur.toNextSelection();
+        }
+    }
+
+    private static boolean runHasTabXml(XmlObject r) {
+        try (XmlCursor c = r.newCursor()) {
+            c.selectPath("declare namespace w='" + NS_W + "' ./w:tab|.//w:tab");
+            return c.toNextSelection();
+        }
+    }
+
     private static String aggregateParagraphSeparated(XmlObject scope, QName limit) {
         XmlObject base = scope;
         if (limit != null) {
@@ -653,7 +627,6 @@ public class WordDocxExtractorRestorer {
         return sb.toString();
     }
 
-    // 调试：回写后重开验证（可选）
     public static void debugScanAfterWriteContainers(XWPFDocument doc) throws Exception {
         ByteArrayOutputStream bos = new ByteArrayOutputStream(); doc.write(bos); bos.flush();
         try (XWPFDocument reopened = new XWPFDocument(new ByteArrayInputStream(bos.toByteArray()))) {

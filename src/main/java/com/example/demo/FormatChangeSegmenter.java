@@ -9,12 +9,11 @@ import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText;
 import javax.xml.namespace.QName;
 import java.util.*;
 
-/** 对段落进行“仅因格式变化分段”，支持宽松合并策略与多容器遍历 */
+/** 仅因格式变化分段；遇到含 <w:tab/> 的 run 视为硬边界且不纳入分段文本 */
 public final class FormatChangeSegmenter {
     private FormatChangeSegmenter() {}
     private static final String NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
-    /** 段片段 */
     public static final class Segment {
         public final XWPFParagraph paragraph;
         public final int runStartIdx;
@@ -27,7 +26,6 @@ public final class FormatChangeSegmenter {
         }
     }
 
-    /** 样式指纹（公开 API + 轻量 XML 读取） */
     public static final class StyleKey {
         public final String fontFamily;
         public final Integer fontSizePt;
@@ -59,7 +57,6 @@ public final class FormatChangeSegmenter {
         }
     }
 
-    /** 遍历文档各容器并分段 */
     public static List<Segment> segmentDocument(XWPFDocument doc) {
         List<Segment> out = new ArrayList<>();
         segmentBody(doc, out);
@@ -112,27 +109,47 @@ public final class FormatChangeSegmenter {
                 segmentBody(cell, out);
     }
 
-    /** 段落分段（带 MergePolicy 的软等价） */
+    /** 分段：遇到含 <w:tab/> 的 run 则立即断段且该 run 不计入文本 */
     public static List<Segment> segmentParagraph(XWPFParagraph p, MergePolicy policy) {
         List<Segment> out = new ArrayList<>();
         List<XWPFRun> runs = p.getRuns();
         if (runs == null || runs.isEmpty()) return out;
 
-        int segStart = 0;
-        StyleKey segKey = keyOf(runs.get(0));
+        int segStart = -1;
+        StyleKey segKey = null;
         StringBuilder segText = new StringBuilder();
 
         for (int i = 0; i < runs.size(); i++) {
             XWPFRun r = runs.get(i);
-            boolean boundary = (i == 0) ? false : hardBoundary(r, runs.get(i - 1));
+            CTR ctr = r.getCTR();
+            boolean isTabRun = runHasTab(ctr);
+
+            if (isTabRun) {
+                if (segStart != -1 && segText.length() > 0) {
+                    out.add(new Segment(p, segStart, i - 1, segKey, segText.toString()));
+                }
+                segStart = -1; segKey = null; segText.setLength(0);
+                continue; // tab run 自身不纳入文本
+            }
+
+            if (segStart == -1) {
+                segStart = i; segKey = keyOf(r);
+                appendRunTextPreserve(r, segText);
+                continue;
+            }
+
+            boolean boundary = hardBoundary(r, runs.get(i - 1));
             StyleKey k = keyOf(r);
-            if (i > 0 && (boundary || !softEqual(segKey, k, policy))) {
+            if (boundary || !softEqual(segKey, k, policy)) {
                 out.add(new Segment(p, segStart, i - 1, segKey, segText.toString()));
                 segStart = i; segKey = k; segText.setLength(0);
             }
             appendRunTextPreserve(r, segText);
         }
-        out.add(new Segment(p, segStart, runs.size() - 1, segKey, segText.toString()));
+
+        if (segStart != -1 && segText.length() > 0) {
+            out.add(new Segment(p, segStart, runs.size() - 1, segKey, segText.toString()));
+        }
         return out;
     }
 
@@ -221,11 +238,8 @@ public final class FormatChangeSegmenter {
                 }
             }
         }
-        try {
-            @SuppressWarnings("deprecation")
-            int v = r.getFontSize();
-            return (v > 0) ? v : null;
-        } catch (Throwable ignore) { return null; }
+        try { @SuppressWarnings("deprecation") int v = r.getFontSize(); return (v > 0) ? v : null; }
+        catch (Throwable ignore) { return null; }
     }
 
     private static String vertAlignOf(XWPFRun r) {
@@ -273,13 +287,17 @@ public final class FormatChangeSegmenter {
         return false;
     }
 
+    private static boolean runHasTab(CTR ctr) {
+        return ctr != null && ctr.sizeOfTabArray() > 0;
+    }
+
     private static void appendRunTextPreserve(XWPFRun r, StringBuilder sb) {
         CTR ctr = r.getCTR(); if (ctr == null) return;
         for (CTText t : ctr.getTList()) { if (t != null) {
             String v = t.getStringValue(); if (v != null) sb.append(v);
         }}
         for (int i = 0; i < ctr.sizeOfBrArray(); i++) sb.append('\n');
-        for (int i = 0; i < ctr.sizeOfTabArray(); i++) sb.append('\t');
+        for (int i = 0; i < ctr.sizeOfTabArray(); i++) { /* tab run 不计入文本 */ }
     }
 
     private static String nz(String s){ return (s==null||s.isEmpty())?null:s; }

@@ -16,8 +16,8 @@ public class TranslateService {
 
     // ===== 参数（可用 .env 覆盖） =====
     // Tier3：把单次预算与批大小默认放宽；仍可用 ENV 覆盖
-    private static final int MAX_TOKENS_PER_REQUEST = getEnvInt("TRANSLATE_MAX_TOKENS_PER_REQUEST", 30000); // prompt + max_tokens
-    private static final int MAX_ITEMS_PER_BATCH     = getEnvInt("TRANSLATE_MAX_ITEMS_PER_BATCH", 500);
+    private static final int MAX_TOKENS_PER_REQUEST = getEnvInt("TRANSLATE_MAX_TOKENS_PER_REQUEST", 16000); // prompt + max_tokens
+    private static final int MAX_ITEMS_PER_BATCH     = getEnvInt("TRANSLATE_MAX_ITEMS_PER_BATCH", 10);
     private static final int EST_PROMPT_OVERHEAD     = 300; // system+user+JSON结构开销
 
     private static final int MAX_COMPLETION_TOKENS   = getEnvInt("MOONSHOT_MAX_COMPLETION", 1500);
@@ -25,7 +25,7 @@ public class TranslateService {
 
     private static final int PARALLELISM             = getEnvInt("MOONSHOT_CONCURRENCY", 32); // 与 Kimi 限流器一致
 
-    // —— 策略/诊断开关（沿用你已有的） ——
+    // —— 策略/诊断开关（沿用已有的） ——
     private static final boolean TRIVIAL_PASSTHROUGH =
             Boolean.parseBoolean(System.getenv().getOrDefault("TRANSLATE_TRIVIAL_PASSTHROUGH","true"));
     private static final boolean LOG_SEGMENT_DECISIONS =
